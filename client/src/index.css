@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Rubik', system-ui, sans-serif;
+  direction: rtl;
+}
+
+.post-card {
+  cursor: grab;
+  user-select: none;
+}
+
+.post-card:active {
+  cursor: grabbing;
+}
+
+.board-canvas {
+  position: relative;
+  overflow: hidden;
+  min-height: calc(100vh - 64px);
+}
+
+.post-card-shadow {
+  box-shadow: 2px 4px 12px rgba(0,0,0,0.15);
+  transition: box-shadow 0.2s, transform 0.1s;
+}
+
+.post-card-shadow:hover {
+  box-shadow: 4px 8px 20px rgba(0,0,0,0.2);
+  transform: translateY(-2px);
+}
+
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track { background: #f1f1f1; }
+::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+
+/* Diagram canvas - hide scrollbar visually but keep scroll functionality */
+.diagram-canvas::-webkit-scrollbar { width: 0; height: 0; }
+.diagram-canvas { scrollbar-width: none; }
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes popIn {
+  0%   { opacity: 0; transform: scale(0.7); }
+  70%  { transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes ringPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.4); }
+  50%       { box-shadow: 0 0 0 14px rgba(255,255,255,0); }
+}
+
+@media print {
+  body * { visibility: hidden; }
+  .board-print-root, .board-print-root * { visibility: visible; }
+  .board-print-root {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    overflow: visible !important;
+    min-height: unset !important;
+  }
+  .board-canvas {
+    overflow: visible !important;
+    height: auto !important;
+    min-height: unset !important;
+  }
+  .no-print { display: none !important; }
+}
