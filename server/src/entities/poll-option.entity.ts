@@ -1,20 +1,21 @@
-import { Column, Entity, ManyToOne, PrimaryColumn } from 'typeorm'
-import { Post } from './post.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('poll_options')
+@Schema({ collection: 'poll_options', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class PollOption {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column({ name: 'post_id' })
+  @Prop({ required: true })
   postId: string
 
-  @Column({ name: 'option_text' })
+  @Prop({ required: true })
   optionText: string
 
-  @Column({ name: 'sort_order', default: 0 })
+  @Prop({ default: 0 })
   sortOrder: number
-
-  @ManyToOne(() => Post, { onDelete: 'CASCADE' })
-  post: Post
 }
+
+export type PollOptionDocument = HydratedDocument<PollOption>
+export const PollOptionSchema = SchemaFactory.createForClass(PollOption)
+PollOptionSchema.index({ postId: 1 })

@@ -1,14 +1,32 @@
 import { Module } from '@nestjs/common'
-import { TypeOrmModule } from '@nestjs/typeorm'
-import { Board, BoardMember, Comment, Notification, PollOption, PollVote, Post, PostLike, PostReaction } from '../../entities'
+import { MongooseModule } from '@nestjs/mongoose'
+import {
+  Board, BoardSchema,
+  BoardMember, BoardMemberSchema,
+  Comment, CommentSchema,
+  Notification, NotificationSchema,
+  PollOption, PollOptionSchema,
+  PollVote, PollVoteSchema,
+  Post, PostSchema,
+  PostLike, PostLikeSchema,
+  PostReaction, PostReactionSchema,
+} from '../../entities'
 import { GatewayModule } from '../../gateway/gateway.module'
 import { BoardPostsController, PostsController } from './posts.controller'
 import { PostsService } from './posts.service'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      Post, Comment, BoardMember, Notification, PostLike, PostReaction, PollOption, PollVote, Board,
+    MongooseModule.forFeature([
+      { name: Post.name, schema: PostSchema },
+      { name: Comment.name, schema: CommentSchema },
+      { name: BoardMember.name, schema: BoardMemberSchema },
+      { name: Notification.name, schema: NotificationSchema },
+      { name: PostLike.name, schema: PostLikeSchema },
+      { name: PostReaction.name, schema: PostReactionSchema },
+      { name: PollOption.name, schema: PollOptionSchema },
+      { name: PollVote.name, schema: PollVoteSchema },
+      { name: Board.name, schema: BoardSchema },
     ]),
     GatewayModule,
   ],

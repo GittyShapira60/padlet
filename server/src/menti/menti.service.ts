@@ -4,14 +4,18 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common'
-import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { InjectModel } from '@nestjs/mongoose'
+import { Model } from 'mongoose'
 import { v4 as uuid } from 'uuid'
 import {
   MentiPresentation,
+  MentiPresentationDocument,
   MentiResponse,
+  MentiResponseDocument,
   MentiSession,
+  MentiSessionDocument,
   MentiSlide,
+  MentiSlideDocument,
   SlideType,
 } from './entities'
 import { EventsGateway } from '../gateway/events.gateway'
@@ -23,119 +27,114 @@ import { UpdateSessionDto } from './dto/update-session.dto'
 @Injectable()
 export class MentiService {
   constructor(
-    @InjectRepository(MentiPresentation) private presentations: Repository<MentiPresentation>,
-    @InjectRepository(MentiSlide) private slides: Repository<MentiSlide>,
-    @InjectRepository(MentiSession) private sessions: Repository<MentiSession>,
-    @InjectRepository(MentiResponse) private responses: Repository<MentiResponse>,
+    @InjectModel(MentiPresentation.name) private presentations: Model<MentiPresentationDocument>,
+    @InjectModel(MentiSlide.name) private slides: Model<MentiSlideDocument>,
+    @InjectModel(MentiSession.name) private sessions: Model<MentiSessionDocument>,
+    @InjectModel(MentiResponse.name) private responses: Model<MentiResponseDocument>,
     private gateway: EventsGateway,
   ) {}
 
   // ─── Presentations ────────────────────────────────────────────────────────────
 
   async findAll(owner: string) {
-    const list = await this.presentations.find({
-      where: { owner },
-      order: { updatedAt: 'DESC' },
-    })
+    const list = await this.presentations.find({ owner }).sort({ updatedAt: -1 })
     const ids = list.map((p) => p.id)
     if (!ids.length) return []
 
-    const slideCounts = await this.slides
-      .createQueryBuilder('s')
-      .select('s.presentationId', 'presentationId')
-      .addSelect('COUNT(s.id)', 'count')
-      .where('s.presentationId IN (:...ids)', { ids })
-      .groupBy('s.presentationId')
-      .getRawMany<{ presentationId: string; count: string }>()
+    const slideCounts = await this.slides.aggregate([
+      { $match: { presentationId: { $in: ids } } },
+      { $group: { _id: '$presentationId', count: { $sum: 1 } } },
+    ])
 
-    const countMap = new Map(slideCounts.map((r) => [r.presentationId, parseInt(r.count) || 0]))
+    const countMap = new Map(slideCounts.map((r) => [r._id, r.count || 0]))
 
-    return list.map((p) => ({ ...p, slideCount: countMap.get(p.id) ?? 0 }))
+    return list.map((p) => ({ ...p.toObject(), slideCount: countMap.get(p.id) ?? 0 }))
   }
 
   async create(dto: CreatePresentationDto, owner: string) {
     const joinCode = await this.generateUniqueCode()
-    const presentation = this.presentations.create({ id: uuid(), owner, joinCode, ...dto })
-    return this.presentations.save(presentation)
+    return this.presentations.create({ _id: uuid(), owner, joinCode, ...dto })
   }
 
   async findOne(id: string, owner: string) {
-    const presentation = await this.presentations.findOne({
-      where: { id, owner },
-      relations: { slides: true },
-      order: { slides: { order: 'ASC' } },
-    })
+    const presentation = await this.presentations.findOne({ _id: id, owner })
     if (!presentation) throw new NotFoundException()
-    return presentation
+    const slides = await this.slides.find({ presentationId: id }).sort({ order: 1 })
+    return { ...presentation.toObject(), slides }
   }
 
   async update(id: string, dto: UpdatePresentationDto, owner: string) {
-    const presentation = await this.findOne(id, owner)
+    const presentation = await this.presentations.findOne({ _id: id, owner })
+    if (!presentation) throw new NotFoundException()
     Object.assign(presentation, dto)
-    return this.presentations.save(presentation)
+    return presentation.save()
   }
 
   async remove(id: string, owner: string) {
     await this.findOne(id, owner)
-    // Delete sessions first (responses cascade via onDelete:CASCADE on session FK)
-    await this.sessions.delete({ presentationId: id })
-    // Delete presentation (slides cascade via onDelete:CASCADE on presentation FK)
-    await this.presentations.delete({ id })
+
+    const [sessions, slides] = await Promise.all([
+      this.sessions.find({ presentationId: id }),
+      this.slides.find({ presentationId: id }),
+    ])
+    const sessionIds = sessions.map((s) => s.id)
+    const slideIds = slides.map((s) => s.id)
+
+    await this.responses.deleteMany({
+      $or: [{ sessionId: { $in: sessionIds } }, { slideId: { $in: slideIds } }],
+    })
+    await this.sessions.deleteMany({ presentationId: id })
+    await this.slides.deleteMany({ presentationId: id })
+    await this.presentations.deleteOne({ _id: id })
   }
 
   // ─── Slides ───────────────────────────────────────────────────────────────────
 
   async addSlide(presentationId: string, dto: CreateSlideDto, owner: string) {
     await this.findOne(presentationId, owner)
-    const existing = await this.slides.find({
-      where: { presentationId },
-      order: { order: 'ASC' },
-    })
+    const existing = await this.slides.find({ presentationId }).sort({ order: 1 })
     const insertAt = dto.insertAtIndex !== undefined
       ? Math.min(dto.insertAtIndex, existing.length)
       : existing.length
 
     if (insertAt < existing.length) {
       await Promise.all(
-        existing.slice(insertAt).map((s) => this.slides.update(s.id, { order: s.order + 1 })),
+        existing.slice(insertAt).map((s) => this.slides.updateOne({ _id: s.id }, { $set: { order: s.order + 1 } })),
       )
     }
 
-    const slide = this.slides.create({
-      id: uuid(),
+    return this.slides.create({
+      _id: uuid(),
       presentationId,
       order: insertAt,
       type: dto.type,
       question: dto.question ?? '',
       config: dto.config ?? this.defaultConfig(dto.type),
     })
-    return this.slides.save(slide)
   }
 
   async updateSlide(presentationId: string, slideId: string, dto: UpdateSlideDto, owner: string) {
     await this.findOne(presentationId, owner)
-    const slide = await this.slides.findOne({ where: { id: slideId, presentationId } })
+    const slide = await this.slides.findOne({ _id: slideId, presentationId })
     if (!slide) throw new NotFoundException()
     Object.assign(slide, dto)
-    return this.slides.save(slide)
+    return slide.save()
   }
 
   async removeSlide(presentationId: string, slideId: string, owner: string) {
     await this.findOne(presentationId, owner)
-    const slide = await this.slides.findOne({ where: { id: slideId, presentationId } })
+    const slide = await this.slides.findOne({ _id: slideId, presentationId })
     if (!slide) throw new NotFoundException()
-    await this.slides.remove(slide)
-    const remaining = await this.slides.find({
-      where: { presentationId },
-      order: { order: 'ASC' },
-    })
-    await Promise.all(remaining.map((s, i) => this.slides.update(s.id, { order: i })))
+    await this.responses.deleteMany({ slideId })
+    await this.slides.deleteOne({ _id: slideId })
+    const remaining = await this.slides.find({ presentationId }).sort({ order: 1 })
+    await Promise.all(remaining.map((s, i) => this.slides.updateOne({ _id: s.id }, { $set: { order: i } })))
   }
 
   async reorderSlides(presentationId: string, slideIds: string[], owner: string) {
     await this.findOne(presentationId, owner)
     await Promise.all(
-      slideIds.map((id, index) => this.slides.update({ id, presentationId }, { order: index })),
+      slideIds.map((id, index) => this.slides.updateOne({ _id: id, presentationId }, { $set: { order: index } })),
     )
   }
 
@@ -143,33 +142,30 @@ export class MentiService {
 
   async startSession(presentationId: string, owner: string, selfPaced = false) {
     await this.findOne(presentationId, owner)
-    await this.sessions.update(
+    await this.sessions.updateMany(
       { presentationId, isActive: true },
-      { isActive: false, endedAt: new Date() },
+      { $set: { isActive: false, endedAt: new Date() } },
     )
-    const session = this.sessions.create({
-      id: uuid(),
+    return this.sessions.create({
+      _id: uuid(),
       presentationId,
       currentSlideIndex: 0,
       isActive: true,
       selfPaced,
       endedAt: null,
     })
-    return this.sessions.save(session)
   }
 
   async updateSession(sessionId: string, dto: UpdateSessionDto, owner: string) {
-    const session = await this.sessions.findOne({
-      where: { id: sessionId },
-      relations: { presentation: true },
-    })
+    const session = await this.sessions.findOne({ _id: sessionId })
     if (!session) throw new NotFoundException()
-    if (session.presentation.owner !== owner) throw new ForbiddenException()
+    const presentation = await this.presentations.findOne({ _id: session.presentationId })
+    if (!presentation || presentation.owner !== owner) throw new ForbiddenException()
 
     Object.assign(session, dto)
     if (dto.isActive === false) session.endedAt = new Date()
 
-    const saved = await this.sessions.save(session)
+    const saved = await session.save()
 
     if (dto.currentSlideIndex !== undefined) {
       this.gateway.emitToRoom(`menti:${sessionId}`, 'menti:slide:change', {
@@ -194,16 +190,14 @@ export class MentiService {
   }
 
   async resetSlideResults(sessionId: string, slideId: string, owner: string) {
-    const session = await this.sessions.findOne({
-      where: { id: sessionId },
-      relations: { presentation: true },
-    })
+    const session = await this.sessions.findOne({ _id: sessionId })
     if (!session) throw new NotFoundException()
-    if (session.presentation.owner !== owner) throw new ForbiddenException()
+    const presentation = await this.presentations.findOne({ _id: session.presentationId })
+    if (!presentation || presentation.owner !== owner) throw new ForbiddenException()
 
-    await this.responses.delete({ sessionId, slideId })
+    await this.responses.deleteMany({ sessionId, slideId })
 
-    const slide = await this.slides.findOne({ where: { id: slideId } })
+    const slide = await this.slides.findOne({ _id: slideId })
     if (slide) {
       const payload = { slideId, results: this.emptyResults(slide.type) }
       this.gateway.emitToRoom(`menti:${sessionId}`, 'menti:results:update', payload)
@@ -212,22 +206,20 @@ export class MentiService {
   }
 
   async markAnswered(sessionId: string, responseId: string, isAnswered: boolean, owner: string) {
-    const session = await this.sessions.findOne({
-      where: { id: sessionId },
-      relations: { presentation: true },
-    })
+    const session = await this.sessions.findOne({ _id: sessionId })
     if (!session) throw new NotFoundException()
-    if (session.presentation.owner !== owner) throw new ForbiddenException()
+    const presentation = await this.presentations.findOne({ _id: session.presentationId })
+    if (!presentation || presentation.owner !== owner) throw new ForbiddenException()
 
-    const response = await this.responses.findOne({ where: { id: responseId, sessionId } })
+    const response = await this.responses.findOne({ _id: responseId, sessionId })
     if (!response) throw new NotFoundException()
 
     response.isAnswered = isAnswered
-    await this.responses.save(response)
+    await response.save()
 
-    const slide = await this.slides.findOne({ where: { id: response.slideId } })
+    const slide = await this.slides.findOne({ _id: response.slideId })
     if (slide) {
-      const slideResponses = await this.responses.find({ where: { sessionId, slideId: response.slideId } })
+      const slideResponses = await this.responses.find({ sessionId, slideId: response.slideId })
       const payload = { slideId: response.slideId, results: this.aggregateResults(slide, slideResponses) }
       this.gateway.emitToRoom(`menti:${sessionId}`, 'menti:results:update', payload)
       this.gateway.emitToRoom(`menti:${sessionId}:presenter`, 'menti:results:update', payload)
@@ -235,14 +227,14 @@ export class MentiService {
   }
 
   async getResults(sessionId: string) {
-    const session = await this.sessions.findOne({
-      where: { id: sessionId },
-      relations: { presentation: { slides: true } },
-    })
+    const session = await this.sessions.findOne({ _id: sessionId })
     if (!session) throw new NotFoundException()
 
-    const allResponses = await this.responses.find({ where: { sessionId } })
-    const slides = (session.presentation.slides ?? []).sort((a, b) => a.order - b.order)
+    const presentation = await this.presentations.findOne({ _id: session.presentationId })
+    const allResponses = await this.responses.find({ sessionId })
+    const slides = presentation
+      ? (await this.slides.find({ presentationId: presentation.id })).sort((a, b) => a.order - b.order)
+      : []
 
     return {
       session: {
@@ -270,54 +262,46 @@ export class MentiService {
   // ─── Public ───────────────────────────────────────────────────────────────────
 
   async findByCode(code: string) {
-    const presentation = await this.presentations.findOne({
-      where: { joinCode: code },
-      relations: { slides: true },
-      order: { slides: { order: 'ASC' } },
-    })
+    const presentation = await this.presentations.findOne({ joinCode: code })
     if (!presentation) throw new NotFoundException('קוד לא נמצא')
 
-    const session = await this.sessions.findOne({
-      where: { presentationId: presentation.id, isActive: true },
-      order: { startedAt: 'DESC' },
-    })
+    const slides = await this.slides.find({ presentationId: presentation.id }).sort({ order: 1 })
 
-    return { presentation, session: session ?? null }
+    const session = await this.sessions
+      .findOne({ presentationId: presentation.id, isActive: true })
+      .sort({ startedAt: -1 })
+
+    return { presentation: { ...presentation.toObject(), slides }, session: session ?? null }
   }
 
   async submitResponse(sessionId: string, dto: SubmitResponseDto, respondent: string | null) {
-    const session = await this.sessions.findOne({
-      where: { id: sessionId },
-      relations: { presentation: true },
-    })
+    const session = await this.sessions.findOne({ _id: sessionId })
     if (!session || !session.isActive) throw new BadRequestException('הסשן לא פעיל')
     if (!session.isVotingOpen) throw new BadRequestException('ההצבעה סגורה כרגע')
 
-    const actualRespondent = session.presentation.anonymousMode ? null : respondent
+    const presentation = await this.presentations.findOne({ _id: session.presentationId })
+    const actualRespondent = presentation?.anonymousMode ? null : respondent
 
     // Prevent duplicate votes for choice/scale/ranking slide types
-    const slide = await this.slides.findOne({ where: { id: dto.slideId } })
+    const slide = await this.slides.findOne({ _id: dto.slideId })
     const noRepeatTypes: string[] = [SlideType.MULTIPLE_CHOICE, SlideType.SCALE, SlideType.RANKING]
     if (actualRespondent && slide && noRepeatTypes.includes(slide.type)) {
       const existing = await this.responses.findOne({
-        where: { sessionId, slideId: dto.slideId, respondent: actualRespondent },
+        sessionId, slideId: dto.slideId, respondent: actualRespondent,
       })
       if (existing) throw new BadRequestException('כבר הצבעת בשאלה זו')
     }
 
-    const response = this.responses.create({
-      id: uuid(),
+    await this.responses.create({
+      _id: uuid(),
       sessionId,
       slideId: dto.slideId,
       respondent: actualRespondent,
       answer: dto.answer,
     })
-    await this.responses.save(response)
 
     if (slide) {
-      const slideResponses = await this.responses.find({
-        where: { sessionId, slideId: dto.slideId },
-      })
+      const slideResponses = await this.responses.find({ sessionId, slideId: dto.slideId })
       const payload = { slideId: dto.slideId, results: this.aggregateResults(slide, slideResponses) }
       this.gateway.emitToRoom(`menti:${sessionId}`, 'menti:results:update', payload)
       this.gateway.emitToRoom(`menti:${sessionId}:presenter`, 'menti:results:update', payload)
@@ -326,7 +310,7 @@ export class MentiService {
 
   // ─── Aggregation ──────────────────────────────────────────────────────────────
 
-  private aggregateResults(slide: MentiSlide, responses: MentiResponse[]): unknown {
+  private aggregateResults(slide: MentiSlideDocument, responses: MentiResponseDocument[]): unknown {
     if (!responses.length) return this.emptyResults(slide.type)
 
     switch (slide.type) {
@@ -417,7 +401,7 @@ export class MentiService {
     let exists = true
     do {
       code = Math.floor(10000000 + Math.random() * 90000000).toString()
-      exists = !!(await this.presentations.findOne({ where: { joinCode: code } }))
+      exists = !!(await this.presentations.findOne({ joinCode: code }))
     } while (exists)
     return code
   }

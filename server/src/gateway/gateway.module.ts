@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common'
-import { TypeOrmModule } from '@nestjs/typeorm'
-import { BoardVisit } from '../entities'
+import { MongooseModule } from '@nestjs/mongoose'
+import { BoardVisit, BoardVisitSchema } from '../entities'
 import { EventsGateway } from './events.gateway'
 
 @Module({
-  imports: [TypeOrmModule.forFeature([BoardVisit])],
+  imports: [MongooseModule.forFeature([{ name: BoardVisit.name, schema: BoardVisitSchema }])],
   providers: [EventsGateway],
   exports: [EventsGateway],
 })

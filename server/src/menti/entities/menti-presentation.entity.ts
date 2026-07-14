@@ -1,22 +1,34 @@
-import { Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn, UpdateDateColumn } from 'typeorm'
-import { MentiSession } from './menti-session.entity'
-import { MentiSlide } from './menti-slide.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('menti_presentations')
+@Schema({ collection: 'menti_presentations', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class MentiPresentation {
-  @PrimaryColumn() id: string
-  @Column() title: string
-  @Column({ default: '' }) description: string
-  @Column() owner: string
-  @Column({ name: 'join_code', unique: true }) joinCode: string
-  @Column({ name: 'anonymous_mode', default: false }) anonymousMode: boolean
+  @Prop({ type: String })
+  _id: string
 
-  @CreateDateColumn({ name: 'created_at' }) createdAt: Date
-  @UpdateDateColumn({ name: 'updated_at' }) updatedAt: Date
+  @Prop({ required: true })
+  title: string
 
-  @OneToMany(() => MentiSlide, (s) => s.presentation, { cascade: true })
-  slides: MentiSlide[]
+  @Prop({ default: '' })
+  description: string
 
-  @OneToMany(() => MentiSession, (s) => s.presentation, { cascade: true })
-  sessions: MentiSession[]
+  @Prop({ required: true })
+  owner: string
+
+  @Prop({ required: true })
+  joinCode: string
+
+  @Prop({ default: false })
+  anonymousMode: boolean
+
+  @Prop({ default: () => new Date() })
+  createdAt: Date
+
+  @Prop({ default: () => new Date() })
+  updatedAt: Date
 }
+
+export type MentiPresentationDocument = HydratedDocument<MentiPresentation>
+export const MentiPresentationSchema = SchemaFactory.createForClass(MentiPresentation)
+MentiPresentationSchema.index({ joinCode: 1 }, { unique: true })
+MentiPresentationSchema.index({ owner: 1 })

@@ -1,17 +1,21 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common'
-import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { InjectModel } from '@nestjs/mongoose'
+import { Model } from 'mongoose'
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard'
-import { User } from '../entities'
+import { User, UserDocument } from '../entities'
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
 @Controller('api/users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(@InjectRepository(User) private users: Repository<User>) {}
+  constructor(@InjectModel(User.name) private users: Model<UserDocument>) {}
 
   @Get('exists')
   async exists(@Query('username') username: string) {
-    const user = await this.users.findOne({ where: { username } })
+    const user = await this.users.findOne({ username })
     return { exists: !!user, username: user?.username ?? null }
   }
 
@@ -19,11 +23,9 @@ export class UsersController {
   async search(@Query('q') q: string) {
     if (!q || q.trim().length < 1) return []
     const users = await this.users
-      .createQueryBuilder('u')
-      .where('u.username ILIKE :q', { q: `${q.trim()}%` })
-      .orderBy('u.username', 'ASC')
+      .find({ username: { $regex: `^${escapeRegex(q.trim())}`, $options: 'i' } })
+      .sort({ username: 1 })
       .limit(6)
-      .getMany()
-    return users.map(u => u.username)
+    return users.map((u) => u.username)
   }
 }

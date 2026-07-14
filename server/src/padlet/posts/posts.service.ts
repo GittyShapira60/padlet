@@ -1,10 +1,20 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { InjectRepository } from '@nestjs/typeorm'
-import { In, Repository } from 'typeorm'
+import { InjectModel } from '@nestjs/mongoose'
+import { Model } from 'mongoose'
 import { v4 as uuid } from 'uuid'
 import { BoardRole } from '../../common/enums'
 import { mapNotification } from '../../common/utils/notification.util'
-import { Board, BoardMember, Comment, Notification, PollOption, PollVote, Post, PostLike, PostReaction } from '../../entities'
+import {
+  Board,
+  BoardMember,
+  Comment, CommentDocument,
+  Notification, NotificationDocument,
+  PollOption, PollOptionDocument,
+  PollVote, PollVoteDocument,
+  Post, PostDocument,
+  PostLike,
+  PostReaction,
+} from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
 import { CreatePostDto } from './dto/create-post.dto'
 import { UpdatePostDto } from './dto/update-post.dto'
@@ -15,21 +25,21 @@ type ReactionSummary = { emoji: string; count: number; reacted_by_me: boolean }
 @Injectable()
 export class PostsService {
   constructor(
-    @InjectRepository(Post) private posts: Repository<Post>,
-    @InjectRepository(Comment) private comments: Repository<Comment>,
-    @InjectRepository(BoardMember) private members: Repository<BoardMember>,
-    @InjectRepository(Notification) private notifications: Repository<Notification>,
-    @InjectRepository(PostLike) private likes: Repository<PostLike>,
-    @InjectRepository(PostReaction) private reactions: Repository<PostReaction>,
-    @InjectRepository(PollOption) private pollOptions: Repository<PollOption>,
-    @InjectRepository(PollVote) private pollVotes: Repository<PollVote>,
-    @InjectRepository(Board) private boardsRepo: Repository<Board>,
+    @InjectModel(Post.name) private posts: Model<PostDocument>,
+    @InjectModel(Comment.name) private comments: Model<CommentDocument>,
+    @InjectModel(BoardMember.name) private members: Model<BoardMember>,
+    @InjectModel(Notification.name) private notifications: Model<NotificationDocument>,
+    @InjectModel(PostLike.name) private likes: Model<PostLike>,
+    @InjectModel(PostReaction.name) private reactions: Model<PostReaction>,
+    @InjectModel(PollOption.name) private pollOptions: Model<PollOptionDocument>,
+    @InjectModel(PollVote.name) private pollVotes: Model<PollVoteDocument>,
+    @InjectModel(Board.name) private boardsRepo: Model<Board>,
     private gateway: EventsGateway,
   ) {}
 
   // ─── Mappers ──────────────────────────────────────────────────────────────────
 
-  private mapComment(comment: Comment) {
+  private mapComment(comment: CommentDocument) {
     return {
       id: comment.id,
       post_id: comment.postId,
@@ -40,9 +50,9 @@ export class PostsService {
   }
 
   private mapPost(
-    post: Post,
+    post: PostDocument,
     extra: {
-      comments?: Comment[]
+      comments?: CommentDocument[]
       liked_by_me?: boolean
       liked_by?: string[]
       poll_options?: MappedPollOption[]
@@ -90,19 +100,19 @@ export class PostsService {
   // ─── Access helpers ───────────────────────────────────────────────────────────
 
   private async getMembership(boardId: string, username: string): Promise<BoardMember> {
-    const m = await this.members.findOne({ where: { boardId, username } })
+    const m = await this.members.findOne({ boardId, username })
     if (m) return m
 
-    const board = await this.boardsRepo.findOne({ where: { id: boardId } })
+    const board = await this.boardsRepo.findOne({ _id: boardId })
     if (board?.isPublic) {
-      return this.members.create({ id: '', boardId, username, role: BoardRole.VIEWER })
+      return { boardId, username, role: BoardRole.VIEWER } as BoardMember
     }
 
     throw new ForbiddenException('Access denied')
   }
 
-  private async getPostOrFail(postId: string): Promise<Post> {
-    const post = await this.posts.findOne({ where: { id: postId } })
+  private async getPostOrFail(postId: string): Promise<PostDocument> {
+    const post = await this.posts.findOne({ _id: postId })
     if (!post) throw new NotFoundException('Post not found')
     return post
   }
@@ -119,19 +129,37 @@ export class PostsService {
     }
   }
 
+  // ─── Cascade delete helper ────────────────────────────────────────────────────
+
+  private async deletePostDependencies(postIds: string[]): Promise<void> {
+    if (!postIds.length) return
+    await Promise.all([
+      this.comments.deleteMany({ postId: { $in: postIds } }),
+      this.likes.deleteMany({ postId: { $in: postIds } }),
+      this.reactions.deleteMany({ postId: { $in: postIds } }),
+      this.pollVotes.deleteMany({ postId: { $in: postIds } }),
+      this.pollOptions.deleteMany({ postId: { $in: postIds } }),
+    ])
+  }
+
   // ─── Posts CRUD ───────────────────────────────────────────────────────────────
 
   async findAll(boardId: string, username: string) {
     await this.getMembership(boardId, username)
-    const posts = await this.posts.find({
-      where: { boardId },
-      order: { createdAt: 'ASC' },
-      relations: ['comments'],
-    })
+    const posts = await this.posts.find({ boardId }).sort({ createdAt: 1 })
 
-    const postIds = posts.map(p => p.id)
+    const postIds = posts.map((p) => p.id)
+    const allComments = postIds.length
+      ? await this.comments.find({ postId: { $in: postIds } }).sort({ createdAt: 1 })
+      : []
+    const commentsByPost = new Map<string, CommentDocument[]>()
+    for (const c of allComments) {
+      if (!commentsByPost.has(c.postId)) commentsByPost.set(c.postId, [])
+      commentsByPost.get(c.postId)!.push(c)
+    }
+
     const allLikes = postIds.length
-      ? await this.likes.find({ where: { postId: In(postIds) } })
+      ? await this.likes.find({ postId: { $in: postIds } })
       : []
 
     const likesByPost = new Map<string, string[]>()
@@ -142,7 +170,7 @@ export class PostsService {
 
     // Load all reactions for these posts
     const allReactions = postIds.length
-      ? await this.reactions.find({ where: { postId: In(postIds) } })
+      ? await this.reactions.find({ postId: { $in: postIds } })
       : []
     const reactionsByPost = new Map<string, PostReaction[]>()
     for (const r of allReactions) {
@@ -156,7 +184,7 @@ export class PostsService {
         const likers = likesByPost.get(p.id) ?? []
         const postReactions = reactionsByPost.get(p.id) ?? []
         return this.mapPost(p, {
-          comments: p.comments ?? [],
+          comments: commentsByPost.get(p.id) ?? [],
           liked_by_me: likers.includes(username),
           liked_by: likers,
           poll_options: pollOptions,
@@ -171,14 +199,14 @@ export class PostsService {
     await this.getMembership(post.boardId, username)
 
     // Each (postId, username, emoji) is independent — toggle the specific emoji
-    const existing = await this.reactions.findOne({ where: { postId, username, emoji } })
+    const existing = await this.reactions.findOne({ postId, username, emoji })
     if (existing) {
-      await this.reactions.delete({ postId, username, emoji })
+      await this.reactions.deleteOne({ postId, username, emoji })
     } else {
-      await this.reactions.save(this.reactions.create({ postId, username, emoji }))
+      await this.reactions.create({ _id: uuid(), postId, username, emoji })
     }
 
-    const allReactions = await this.reactions.find({ where: { postId } })
+    const allReactions = await this.reactions.find({ postId })
     const summary = this.buildReactionSummary(allReactions, username)
     this.gateway.emitToBoard(post.boardId, 'post:reactions', { postId, reactions: summary })
     return { postId, reactions: summary }
@@ -189,8 +217,8 @@ export class PostsService {
     this.assertWritePermission(m.role)
 
     const { poll_options: pollOpts, image_url, link_url, link_title, link_description, link_image, shape, ...rest } = dto
-    const post = this.posts.create({
-      id: uuid(),
+    const post = await this.posts.create({
+      _id: uuid(),
       boardId,
       author: username,
       imageUrl: image_url ?? '',
@@ -201,7 +229,6 @@ export class PostsService {
       shape: shape ?? 'rect',
       ...rest,
     })
-    await this.posts.save(post)
 
     const savedPollOptions = pollOpts?.length ? await this.createPollOptions(post.id, pollOpts) : undefined
 
@@ -218,8 +245,8 @@ export class PostsService {
     Object.assign(post, dto)
     if (isContentChange) post.editedBy = username
 
-    const saved = await this.posts.save(post)
-    const comments = await this.comments.find({ where: { postId: saved.id }, order: { createdAt: 'ASC' } })
+    const saved = await post.save()
+    const comments = await this.comments.find({ postId: saved.id }).sort({ createdAt: 1 })
     const mapped = this.mapPost(saved, { comments })
     this.gateway.emitToBoard(post.boardId, 'post:updated', mapped)
     return mapped
@@ -228,7 +255,8 @@ export class PostsService {
   async remove(postId: string, username: string) {
     const { post, membership: m } = await this.getPostWithMembership(postId, username)
     this.assertWritePermission(m.role)
-    await this.posts.remove(post)
+    await this.deletePostDependencies([postId])
+    await this.posts.deleteOne({ _id: postId })
     this.gateway.emitToBoard(post.boardId, 'post:deleted', postId)
   }
 
@@ -237,7 +265,7 @@ export class PostsService {
   async getComments(postId: string, username: string) {
     const post = await this.getPostOrFail(postId)
     await this.getMembership(post.boardId, username)
-    const list = await this.comments.find({ where: { postId }, order: { createdAt: 'ASC' } })
+    const list = await this.comments.find({ postId }).sort({ createdAt: 1 })
     return list.map((c) => this.mapComment(c))
   }
 
@@ -246,21 +274,18 @@ export class PostsService {
     const m = await this.getMembership(post.boardId, username)
     if (m.role === BoardRole.VIEWER) throw new ForbiddenException('No comment permission')
 
-    const comment = this.comments.create({ id: uuid(), postId, content, author: username })
-    const saved = await this.comments.save(comment)
+    const saved = await this.comments.create({ _id: uuid(), postId, content, author: username })
     const mapped = this.mapComment(saved)
     this.gateway.emitToBoard(post.boardId, 'comment:created', { postId, comment: mapped })
 
     if (post.author !== username) {
-      const notif = await this.notifications.save(
-        this.notifications.create({
-          id: uuid(),
-          username: post.author,
-          type: 'comment',
-          message: `${username} הגיב על הפוסט שלך`,
-          boardId: post.boardId,
-        }),
-      )
+      const notif = await this.notifications.create({
+        _id: uuid(),
+        username: post.author,
+        type: 'comment',
+        message: `${username} הגיב על הפוסט שלך`,
+        boardId: post.boardId,
+      })
       this.gateway.emitToUser(post.author, 'notification:new', mapNotification(notif))
     }
 
@@ -273,18 +298,18 @@ export class PostsService {
     const post = await this.getPostOrFail(postId)
     await this.getMembership(post.boardId, username)
 
-    const existing = await this.likes.findOne({ where: { postId, username } })
+    const existing = await this.likes.findOne({ postId, username })
     if (existing) {
-      await this.likes.remove(existing)
+      await this.likes.deleteOne({ postId, username })
       post.likes = Math.max(0, post.likes - 1)
     } else {
-      await this.likes.save(this.likes.create({ postId, username }))
+      await this.likes.create({ _id: uuid(), postId, username })
       post.likes = post.likes + 1
     }
 
-    const saved = await this.posts.save(post)
-    const allLikes = await this.likes.find({ where: { postId } })
-    const likers = allLikes.map(l => l.username)
+    const saved = await post.save()
+    const allLikes = await this.likes.find({ postId })
+    const likers = allLikes.map((l) => l.username)
     this.gateway.emitToBoard(post.boardId, 'post:likes', { postId, likes: saved.likes, liked_by: likers })
     return this.mapPost(saved, { liked_by_me: !existing, liked_by: likers })
   }
@@ -295,17 +320,17 @@ export class PostsService {
     const post = await this.getPostOrFail(postId)
     await this.getMembership(post.boardId, username)
 
-    const existing = await this.pollVotes.findOne({ where: { postId, username } })
+    const existing = await this.pollVotes.findOne({ postId, username })
     if (existing) {
       existing.optionId = optionId
-      await this.pollVotes.save(existing)
+      await existing.save()
     } else {
-      await this.pollVotes.save(this.pollVotes.create({ id: uuid(), postId, optionId, username }))
+      await this.pollVotes.create({ _id: uuid(), postId, optionId, username })
     }
 
     const [pollOptions, comments] = await Promise.all([
       this.getPollOptionsForPost(postId, username),
-      this.comments.find({ where: { postId }, order: { createdAt: 'ASC' } }),
+      this.comments.find({ postId }).sort({ createdAt: 1 }),
     ])
     const mapped = this.mapPost(post, { poll_options: pollOptions, comments })
     this.gateway.emitToBoard(post.boardId, 'post:updated', mapped)
@@ -313,18 +338,16 @@ export class PostsService {
   }
 
   private async createPollOptions(postId: string, texts: string[]): Promise<MappedPollOption[]> {
-    const created = await this.pollOptions.save(
-      texts.map((text, i) =>
-        this.pollOptions.create({ id: uuid(), postId, optionText: text, sortOrder: i }),
-      ),
+    const created = await this.pollOptions.insertMany(
+      texts.map((text, i) => ({ _id: uuid(), postId, optionText: text, sortOrder: i })),
     )
     return created.map((o) => ({ id: o.id, option_text: o.optionText, votes: 0, voted_by_me: false }))
   }
 
   private async getPollOptionsForPost(postId: string, username: string): Promise<MappedPollOption[]> {
     const [options, votes] = await Promise.all([
-      this.pollOptions.find({ where: { postId }, order: { sortOrder: 'ASC' } }),
-      this.pollVotes.find({ where: { postId } }),
+      this.pollOptions.find({ postId }).sort({ sortOrder: 1 }),
+      this.pollVotes.find({ postId }),
     ])
     const myVote = votes.find((v) => v.username === username)
 

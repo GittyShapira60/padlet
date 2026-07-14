@@ -1,26 +1,22 @@
-import { Column, Entity, ManyToOne, PrimaryColumn, Unique } from 'typeorm'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 import { BoardRole } from '../common/enums'
-import { Board } from './board.entity'
-import { User } from './user.entity'
 
-@Entity('board_members')
-@Unique(['boardId', 'username'])
+@Schema({ collection: 'board_members', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class BoardMember {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column({ name: 'board_id' })
+  @Prop({ required: true })
   boardId: string
 
-  @Column()
+  @Prop({ required: true })
   username: string
 
-  @Column({ type: 'varchar', default: BoardRole.WRITER })
+  @Prop({ type: String, default: BoardRole.WRITER })
   role: BoardRole
-
-  @ManyToOne(() => Board, (b) => b.members, { onDelete: 'CASCADE' })
-  board: Board
-
-  @ManyToOne(() => User, (u) => u.memberships, { onDelete: 'CASCADE' })
-  user: User
 }
+
+export type BoardMemberDocument = HydratedDocument<BoardMember>
+export const BoardMemberSchema = SchemaFactory.createForClass(BoardMember)
+BoardMemberSchema.index({ boardId: 1, username: 1 }, { unique: true })

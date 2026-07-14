@@ -1,12 +1,23 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { InjectRepository } from '@nestjs/typeorm'
-import { In, Repository } from 'typeorm'
+import { InjectModel } from '@nestjs/mongoose'
+import { Model } from 'mongoose'
 import { v4 as uuid } from 'uuid'
 import { BoardRole } from '../../common/enums'
 import { formatDate } from '../../common/utils/date.util'
 import { mapNotification } from '../../common/utils/notification.util'
 import { generatePassword } from '../../common/utils/random.util'
-import { Board, BoardMember, BoardVisit, Notification, PollOption, Post } from '../../entities'
+import {
+  Board, BoardDocument,
+  BoardMember, BoardMemberDocument,
+  BoardVisit,
+  Comment,
+  Notification, NotificationDocument,
+  PollOption, PollOptionDocument,
+  PollVote,
+  Post, PostDocument,
+  PostLike,
+  PostReaction,
+} from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
 import { CreateBoardDto } from './dto/create-board.dto'
 import { UpdateBoardDto } from './dto/update-board.dto'
@@ -14,23 +25,27 @@ import { UpdateBoardDto } from './dto/update-board.dto'
 @Injectable()
 export class BoardsService {
   constructor(
-    @InjectRepository(Board) private boards: Repository<Board>,
-    @InjectRepository(BoardMember) private members: Repository<BoardMember>,
-    @InjectRepository(BoardVisit) private boardVisits: Repository<BoardVisit>,
-    @InjectRepository(Post) private posts: Repository<Post>,
-    @InjectRepository(Notification) private notifications: Repository<Notification>,
-    @InjectRepository(PollOption) private pollOptions: Repository<PollOption>,
+    @InjectModel(Board.name) private boards: Model<BoardDocument>,
+    @InjectModel(BoardMember.name) private members: Model<BoardMemberDocument>,
+    @InjectModel(BoardVisit.name) private boardVisits: Model<BoardVisit>,
+    @InjectModel(Post.name) private posts: Model<PostDocument>,
+    @InjectModel(Notification.name) private notifications: Model<NotificationDocument>,
+    @InjectModel(PollOption.name) private pollOptions: Model<PollOptionDocument>,
+    @InjectModel(Comment.name) private comments: Model<Comment>,
+    @InjectModel(PostLike.name) private postLikes: Model<PostLike>,
+    @InjectModel(PostReaction.name) private postReactions: Model<PostReaction>,
+    @InjectModel(PollVote.name) private pollVotes: Model<PollVote>,
     private gateway: EventsGateway,
   ) {}
 
   // ─── Private helpers ──────────────────────────────────────────────────────────
 
-  private async assertOwner(boardId: string, username: string, board?: Board): Promise<void> {
-    const b = board ?? await this.boards.findOne({ where: { id: boardId } })
+  private async assertOwner(boardId: string, username: string, board?: BoardDocument): Promise<void> {
+    const b = board ?? await this.boards.findOne({ _id: boardId })
     if (!b) throw new NotFoundException()
     const isOwner =
       b.owner === username ||
-      (await this.members.findOne({ where: { boardId, username } }))?.role === BoardRole.OWNER
+      (await this.members.findOne({ boardId, username }))?.role === BoardRole.OWNER
     if (!isOwner) throw new ForbiddenException('Only owner can perform this action')
   }
 
@@ -40,13 +55,11 @@ export class BoardsService {
     message: string,
     boardId: string,
     boardTitle: string,
-  ): Promise<Notification> {
-    return this.notifications.save(
-      this.notifications.create({ id: uuid(), username, type, message, boardId, boardTitle }),
-    )
+  ): Promise<NotificationDocument> {
+    return this.notifications.create({ _id: uuid(), username, type, message, boardId, boardTitle })
   }
 
-  private emitNotification(notif: Notification): void {
+  private emitNotification(notif: NotificationDocument): void {
     this.gateway.emitToUser(notif.username, 'notification:new', mapNotification(notif))
   }
 
@@ -64,68 +77,61 @@ export class BoardsService {
   // ─── Board CRUD ───────────────────────────────────────────────────────────────
 
   async findAll(username: string) {
-    const myMemberships = await this.members.find({ where: { username } })
+    const myMemberships = await this.members.find({ username })
     const boardIds = myMemberships.map((m) => m.boardId)
     if (!boardIds.length) return []
 
-    const [boards, rawCounts] = await Promise.all([
-      this.boards
-        .createQueryBuilder('b')
-        .whereInIds(boardIds)
-        .leftJoinAndSelect('b.members', 'members')
-        .orderBy('b.updatedAt', 'DESC')
-        .getMany(),
-      this.posts
-        .createQueryBuilder('p')
-        .select('p.boardId', 'boardId')
-        .addSelect('COUNT(p.id)', 'count')
-        .where('p.boardId IN (:...boardIds)', { boardIds })
-        .groupBy('p.boardId')
-        .getRawMany(),
+    const [boardsList, rawCounts, allMembers] = await Promise.all([
+      this.boards.find({ _id: { $in: boardIds } }).sort({ updatedAt: -1 }),
+      this.posts.aggregate([
+        { $match: { boardId: { $in: boardIds } } },
+        { $group: { _id: '$boardId', count: { $sum: 1 } } },
+      ]),
+      this.members.find({ boardId: { $in: boardIds } }),
     ])
 
-    const countMap = new Map(rawCounts.map((r) => [r.boardId, parseInt(r.count) || 0]))
+    const countMap = new Map(rawCounts.map((r) => [r._id, r.count || 0]))
+    const membersByBoard = new Map<string, BoardMember[]>()
+    for (const m of allMembers) {
+      if (!membersByBoard.has(m.boardId)) membersByBoard.set(m.boardId, [])
+      membersByBoard.get(m.boardId)!.push(m)
+    }
 
-    return boards.map((b) => ({
-      ...b,
-      members: b.members ?? [],
+    return boardsList.map((b) => ({
+      ...b.toObject(),
+      members: membersByBoard.get(b.id) ?? [],
       my_role: myMemberships.find((m) => m.boardId === b.id)?.role ?? 'viewer',
       post_count: countMap.get(b.id) ?? 0,
     }))
   }
 
   async findOne(id: string, username: string) {
-    const board = await this.boards.findOne({ where: { id }, relations: ['members'] })
+    const board = await this.boards.findOne({ _id: id })
     if (!board) throw new NotFoundException('Board not found')
 
-    let member = board.members.find((m) => m.username === username)
-    if (!member) {
-      member = (await this.members.findOne({ where: { boardId: id, username } })) ?? undefined
-    }
+    const boardMembers = await this.members.find({ boardId: id })
+    const member = boardMembers.find((m) => m.username === username)
 
     if (!member && board.owner !== username) {
-      if (board.isPublic) return { ...board, my_role: BoardRole.VIEWER, members: board.members ?? [] }
+      if (board.isPublic) return { ...board.toObject(), my_role: BoardRole.VIEWER, members: boardMembers }
       throw new ForbiddenException('Access denied')
     }
 
-    return { ...board, members: board.members ?? [], my_role: member?.role ?? BoardRole.OWNER }
+    return { ...board.toObject(), members: boardMembers, my_role: member?.role ?? BoardRole.OWNER }
   }
 
   async create(dto: CreateBoardDto, username: string) {
-    const board = this.boards.create({ id: uuid(), ...dto, owner: username })
-    await this.boards.save(board)
-    await this.members.save(
-      this.members.create({ id: uuid(), boardId: board.id, username, role: BoardRole.OWNER }),
-    )
+    const board = await this.boards.create({ _id: uuid(), ...dto, owner: username })
+    await this.members.create({ _id: uuid(), boardId: board.id, username, role: BoardRole.OWNER })
     return board
   }
 
   async update(id: string, dto: UpdateBoardDto, username: string) {
-    const board = await this.boards.findOne({ where: { id } })
+    const board = await this.boards.findOne({ _id: id })
     if (!board) throw new NotFoundException('Board not found')
 
     if (board.owner !== username) {
-      const member = await this.members.findOne({ where: { boardId: id, username } })
+      const member = await this.members.findOne({ boardId: id, username })
       if (!member) throw new ForbiddenException()
       if (member.role === BoardRole.VIEWER || member.role === BoardRole.COMMENTER) {
         throw new ForbiddenException('No edit permission')
@@ -133,7 +139,7 @@ export class BoardsService {
     }
 
     Object.assign(board, dto)
-    const saved = await this.boards.save(board)
+    const saved = await board.save()
 
     this.gateway.emitToBoard(id, 'board:updated', {
       id: saved.id,
@@ -151,15 +157,25 @@ export class BoardsService {
   }
 
   async remove(id: string, username: string) {
-    const board = await this.boards.findOne({ where: { id } })
+    const board = await this.boards.findOne({ _id: id })
     if (!board) throw new NotFoundException()
 
     const isOwner =
       board.owner === username ||
-      (await this.members.findOne({ where: { boardId: id, username } }))?.role === BoardRole.OWNER
+      (await this.members.findOne({ boardId: id, username }))?.role === BoardRole.OWNER
     if (!isOwner) throw new ForbiddenException('Only owner can delete')
 
-    await this.boards.delete(id)
+    const postIds = (await this.posts.find({ boardId: id })).map((p) => p.id)
+    await Promise.all([
+      this.comments.deleteMany({ postId: { $in: postIds } }),
+      this.postLikes.deleteMany({ postId: { $in: postIds } }),
+      this.postReactions.deleteMany({ postId: { $in: postIds } }),
+      this.pollVotes.deleteMany({ postId: { $in: postIds } }),
+      this.pollOptions.deleteMany({ postId: { $in: postIds } }),
+    ])
+    await this.posts.deleteMany({ boardId: id })
+    await this.members.deleteMany({ boardId: id })
+    await this.boards.deleteOne({ _id: id })
   }
 
   // ─── Duplicate ────────────────────────────────────────────────────────────────
@@ -173,7 +189,7 @@ export class BoardsService {
     membersOption: 'keep' | 'none' = 'none',
     customPassword?: string,
   ) {
-    const board = await this.boards.findOne({ where: { id } })
+    const board = await this.boards.findOne({ _id: id })
     if (!board) throw new NotFoundException()
     await this.assertOwner(id, username, board)
 
@@ -186,7 +202,7 @@ export class BoardsService {
 
     const copiedCount = await this.copyPosts(id, newBoard.id, username, postsOption)
 
-    return { ...newBoard, my_role: BoardRole.OWNER, post_count: copiedCount }
+    return { ...newBoard.toObject(), my_role: BoardRole.OWNER, post_count: copiedCount }
   }
 
   private resolvePassword(
@@ -200,13 +216,13 @@ export class BoardsService {
   }
 
   private async createDuplicateBoard(
-    source: Board,
+    source: BoardDocument,
     username: string,
     newTitle: string | undefined,
     password: string,
-  ): Promise<Board> {
-    const newBoard = this.boards.create({
-      id: uuid(),
+  ): Promise<BoardDocument> {
+    const newBoard = await this.boards.create({
+      _id: uuid(),
       title: newTitle?.trim() || `עותק של ${source.title}`,
       description: source.description,
       background: source.background,
@@ -214,22 +230,17 @@ export class BoardsService {
       password,
       owner: username,
     })
-    await this.boards.save(newBoard)
-    await this.members.save(
-      this.members.create({ id: uuid(), boardId: newBoard.id, username, role: BoardRole.OWNER }),
-    )
+    await this.members.create({ _id: uuid(), boardId: newBoard.id, username, role: BoardRole.OWNER })
     return newBoard
   }
 
-  private async copyMembers(sourceBoardId: string, username: string, newBoard: Board): Promise<void> {
-    const allMembers = await this.members.find({ where: { boardId: sourceBoardId } })
+  private async copyMembers(sourceBoardId: string, username: string, newBoard: BoardDocument): Promise<void> {
+    const allMembers = await this.members.find({ boardId: sourceBoardId })
     const membersToAdd = allMembers.filter((m) => m.username !== username && m.role !== BoardRole.OWNER)
     if (!membersToAdd.length) return
 
-    await this.members.save(
-      membersToAdd.map((m) =>
-        this.members.create({ id: uuid(), boardId: newBoard.id, username: m.username, role: m.role }),
-      ),
+    await this.members.insertMany(
+      membersToAdd.map((m) => ({ _id: uuid(), boardId: newBoard.id, username: m.username, role: m.role })),
     )
 
     await Promise.all(
@@ -253,19 +264,21 @@ export class BoardsService {
   ): Promise<number> {
     if (option === 'none') return 0
 
-    let posts = await this.posts.find({ where: { boardId: sourceBoardId } })
+    let posts = await this.posts.find({ boardId: sourceBoardId })
     if (option === 'mine') posts = posts.filter((p) => p.author === username)
     if (!posts.length) return 0
 
     const idMap = new Map(posts.map((p) => [p.id, uuid()]))
-    await this.posts.save(posts.map((p) => this.posts.create({ ...p, id: idMap.get(p.id)!, boardId: destBoardId })))
+    await this.posts.insertMany(
+      posts.map((p) => ({ ...p.toObject(), _id: idMap.get(p.id)!, boardId: destBoardId })),
+    )
 
     const pollPostIds = posts.filter((p) => p.type === 'poll').map((p) => p.id)
     if (pollPostIds.length) {
-      const options = await this.pollOptions.find({ where: { postId: In(pollPostIds) } })
+      const options = await this.pollOptions.find({ postId: { $in: pollPostIds } })
       if (options.length) {
-        await this.pollOptions.save(
-          options.map((o) => this.pollOptions.create({ ...o, id: uuid(), postId: idMap.get(o.postId)! })),
+        await this.pollOptions.insertMany(
+          options.map((o) => ({ ...o.toObject(), _id: uuid(), postId: idMap.get(o.postId)! })),
         )
       }
     }
@@ -276,15 +289,15 @@ export class BoardsService {
   // ─── Password reset ───────────────────────────────────────────────────────────
 
   async resetPassword(id: string, username: string) {
-    const board = await this.boards.findOne({ where: { id } })
+    const board = await this.boards.findOne({ _id: id })
     if (!board) throw new NotFoundException()
     if (board.owner !== username) throw new ForbiddenException('Only owner can reset password')
 
     const newPassword = generatePassword()
     board.password = newPassword
-    await this.boards.save(board)
+    await board.save()
 
-    const allMembers = await this.members.find({ where: { boardId: id } })
+    const allMembers = await this.members.find({ boardId: id })
     const nonOwners = allMembers.filter((m) => m.username !== username)
 
     await Promise.all([
@@ -312,12 +325,12 @@ export class BoardsService {
   // ─── Stats ────────────────────────────────────────────────────────────────────
 
   async getStats(username: string) {
-    const allMemberships = await this.members.find({ where: { username } })
+    const allMemberships = await this.members.find({ username })
     const allBoardIds = allMemberships.map((m) => m.boardId)
 
     if (!allBoardIds.length) return this.emptyStats()
 
-    const allBoards = await this.boards.createQueryBuilder('b').whereInIds(allBoardIds).getMany()
+    const allBoards = await this.boards.find({ _id: { $in: allBoardIds } })
     const myBoards = allBoards.filter((b) => b.owner === username)
     const sharedCount = allBoards.length - myBoards.length
 
@@ -333,65 +346,64 @@ export class BoardsService {
 
     const [postTypeRaw, postsPerBoardRaw, postsPerDayRaw, visitsPerBoardRaw, visitsPerDayRaw] =
       await Promise.all([
-        this.posts
-          .createQueryBuilder('p')
-          .select('p.type', 'type')
-          .addSelect('COUNT(p.id)', 'count')
-          .where('p.boardId IN (:...myBoardIds)', { myBoardIds })
-          .groupBy('p.type')
-          .getRawMany(),
-        this.posts
-          .createQueryBuilder('p')
-          .select('p.boardId', 'boardId')
-          .addSelect('COUNT(p.id)', 'count')
-          .where('p.boardId IN (:...myBoardIds)', { myBoardIds })
-          .groupBy('p.boardId')
-          .getRawMany(),
-        this.posts
-          .createQueryBuilder('p')
-          .select('DATE(p.created_at)', 'date')
-          .addSelect('COUNT(p.id)', 'count')
-          .where('p.boardId IN (:...myBoardIds)', { myBoardIds })
-          .andWhere('p.created_at >= :twoWeeksAgo', { twoWeeksAgo })
-          .groupBy('DATE(p.created_at)')
-          .orderBy('DATE(p.created_at)', 'ASC')
-          .getRawMany(),
-        this.boardVisits
-          .createQueryBuilder('v')
-          .select('v.boardId', 'boardId')
-          .addSelect('COUNT(v.id)', 'visit_count')
-          .addSelect('COUNT(DISTINCT v.username)', 'unique_visitors')
-          .addSelect('AVG(v.durationSeconds)', 'avg_duration')
-          .where('v.boardId IN (:...myBoardIds)', { myBoardIds })
-          .groupBy('v.boardId')
-          .getRawMany(),
-        this.boardVisits
-          .createQueryBuilder('v')
-          .select('DATE(v.visitedAt)', 'date')
-          .addSelect('COUNT(v.id)', 'count')
-          .where('v.boardId IN (:...myBoardIds)', { myBoardIds })
-          .andWhere('v.visitedAt >= :twoWeeksAgo', { twoWeeksAgo })
-          .groupBy('DATE(v.visitedAt)')
-          .orderBy('DATE(v.visitedAt)', 'ASC')
-          .getRawMany(),
+        this.posts.aggregate([
+          { $match: { boardId: { $in: myBoardIds } } },
+          { $group: { _id: '$type', count: { $sum: 1 } } },
+        ]),
+        this.posts.aggregate([
+          { $match: { boardId: { $in: myBoardIds } } },
+          { $group: { _id: '$boardId', count: { $sum: 1 } } },
+        ]),
+        this.posts.aggregate([
+          { $match: { boardId: { $in: myBoardIds }, createdAt: { $gte: twoWeeksAgo } } },
+          {
+            $group: {
+              _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]),
+        this.boardVisits.aggregate([
+          { $match: { boardId: { $in: myBoardIds } } },
+          {
+            $group: {
+              _id: '$boardId',
+              visit_count: { $sum: 1 },
+              unique_visitors: { $addToSet: '$username' },
+              avg_duration: { $avg: '$durationSeconds' },
+            },
+          },
+          { $project: { visit_count: 1, avg_duration: 1, unique_visitors: { $size: '$unique_visitors' } } },
+        ]),
+        this.boardVisits.aggregate([
+          { $match: { boardId: { $in: myBoardIds }, visitedAt: { $gte: twoWeeksAgo } } },
+          {
+            $group: {
+              _id: { $dateToString: { format: '%Y-%m-%d', date: '$visitedAt', timezone: 'UTC' } },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]),
       ])
 
     const postTypeCounts: Record<string, number> = {}
     let totalPosts = 0
     for (const r of postTypeRaw) {
-      const cnt = parseInt(r.count) || 0
-      postTypeCounts[r.type] = cnt
+      const cnt = r.count || 0
+      postTypeCounts[r._id] = cnt
       totalPosts += cnt
     }
 
-    const boardPostMap = new Map(postsPerBoardRaw.map((r) => [r.boardId, parseInt(r.count) || 0]))
+    const boardPostMap = new Map(postsPerBoardRaw.map((r) => [r._id, r.count || 0]))
     const visitMap = new Map(
       visitsPerBoardRaw.map((r) => [
-        r.boardId,
+        r._id,
         {
-          visit_count: parseInt(r.visit_count) || 0,
-          unique_visitors: parseInt(r.unique_visitors) || 0,
-          avg_duration: Math.round(parseFloat(r.avg_duration) || 0),
+          visit_count: r.visit_count || 0,
+          unique_visitors: r.unique_visitors || 0,
+          avg_duration: Math.round(r.avg_duration || 0),
         },
       ]),
     )
@@ -419,10 +431,10 @@ export class BoardsService {
       shared_boards: sharedCount,
       layout_counts: layoutCounts,
       post_type_counts: postTypeCounts,
-      posts_per_day: postsPerDayRaw.map((r) => ({ date: formatDate(r.date), count: parseInt(r.count) || 0 })),
+      posts_per_day: postsPerDayRaw.map((r) => ({ date: formatDate(r._id), count: r.count || 0 })),
       top_boards: topBoards,
       top_boards_by_visits: topBoardsByVisits,
-      visits_per_day: visitsPerDayRaw.map((r) => ({ date: formatDate(r.date), count: parseInt(r.count) || 0 })),
+      visits_per_day: visitsPerDayRaw.map((r) => ({ date: formatDate(r._id), count: r.count || 0 })),
     }
   }
 
@@ -431,51 +443,62 @@ export class BoardsService {
     const twoWeeksAgo = this.twoWeeksAgo()
 
     const [visitsPerDayRaw, allTimeRaw, visitorsRaw] = await Promise.all([
-      this.boardVisits
-        .createQueryBuilder('v')
-        .select('DATE(v.visitedAt)', 'date')
-        .addSelect('COUNT(v.id)', 'count')
-        .addSelect('COUNT(DISTINCT v.username)', 'unique_visitors')
-        .addSelect('AVG(v.durationSeconds)', 'avg_duration')
-        .where('v.boardId = :boardId', { boardId })
-        .andWhere('v.visitedAt >= :twoWeeksAgo', { twoWeeksAgo })
-        .groupBy('DATE(v.visitedAt)')
-        .orderBy('DATE(v.visitedAt)', 'ASC')
-        .getRawMany(),
-      this.boardVisits
-        .createQueryBuilder('v')
-        .select('COUNT(v.id)', 'total_visits')
-        .addSelect('COUNT(DISTINCT v.username)', 'unique_visitors')
-        .addSelect('AVG(v.durationSeconds)', 'avg_duration')
-        .where('v.boardId = :boardId', { boardId })
-        .getRawOne(),
-      this.boardVisits
-        .createQueryBuilder('v')
-        .select('v.username', 'username')
-        .addSelect('COUNT(v.id)', 'visit_count')
-        .addSelect('MAX(v.visitedAt)', 'last_visit')
-        .addSelect('AVG(v.durationSeconds)', 'avg_duration')
-        .where('v.boardId = :boardId', { boardId })
-        .groupBy('v.username')
-        .orderBy('last_visit', 'DESC')
-        .getRawMany(),
+      this.boardVisits.aggregate([
+        { $match: { boardId, visitedAt: { $gte: twoWeeksAgo } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$visitedAt', timezone: 'UTC' } },
+            count: { $sum: 1 },
+            unique_visitors: { $addToSet: '$username' },
+            avg_duration: { $avg: '$durationSeconds' },
+          },
+        },
+        { $project: { count: 1, avg_duration: 1, unique_visitors: { $size: '$unique_visitors' } } },
+        { $sort: { _id: 1 } },
+      ]),
+      this.boardVisits.aggregate([
+        { $match: { boardId } },
+        {
+          $group: {
+            _id: null,
+            total_visits: { $sum: 1 },
+            unique_visitors: { $addToSet: '$username' },
+            avg_duration: { $avg: '$durationSeconds' },
+          },
+        },
+        { $project: { total_visits: 1, avg_duration: 1, unique_visitors: { $size: '$unique_visitors' } } },
+      ]),
+      this.boardVisits.aggregate([
+        { $match: { boardId } },
+        {
+          $group: {
+            _id: '$username',
+            visit_count: { $sum: 1 },
+            last_visit: { $max: '$visitedAt' },
+            avg_duration: { $avg: '$durationSeconds' },
+          },
+        },
+        { $sort: { last_visit: -1 } },
+      ]),
     ])
+
+    const allTime = allTimeRaw[0]
 
     return {
       visits_per_day: visitsPerDayRaw.map((r) => ({
-        date: formatDate(r.date),
-        count: parseInt(r.count) || 0,
-        unique_visitors: parseInt(r.unique_visitors) || 0,
-        avg_duration: Math.round(parseFloat(r.avg_duration) || 0),
+        date: formatDate(r._id),
+        count: r.count || 0,
+        unique_visitors: r.unique_visitors || 0,
+        avg_duration: Math.round(r.avg_duration || 0),
       })),
-      total_visits: parseInt(allTimeRaw?.total_visits) || 0,
-      unique_visitors: parseInt(allTimeRaw?.unique_visitors) || 0,
-      avg_duration: Math.round(parseFloat(allTimeRaw?.avg_duration) || 0),
+      total_visits: allTime?.total_visits || 0,
+      unique_visitors: allTime?.unique_visitors || 0,
+      avg_duration: Math.round(allTime?.avg_duration || 0),
       visitors: visitorsRaw.map((r) => ({
-        username: r.username,
-        visit_count: parseInt(r.visit_count) || 0,
+        username: r._id,
+        visit_count: r.visit_count || 0,
         last_visit: r.last_visit instanceof Date ? r.last_visit.toISOString() : String(r.last_visit),
-        avg_duration: Math.round(parseFloat(r.avg_duration) || 0),
+        avg_duration: Math.round(r.avg_duration || 0),
       })),
     }
   }
@@ -484,24 +507,23 @@ export class BoardsService {
 
   async getMembers(boardId: string, username: string) {
     await this.findOne(boardId, username)
-    return this.members.find({ where: { boardId } })
+    return this.members.find({ boardId })
   }
 
   async addMember(boardId: string, targetUsername: string, role: BoardRole, requestingUsername: string) {
-    const board = await this.boards.findOne({ where: { id: boardId } })
+    const board = await this.boards.findOne({ _id: boardId })
     if (!board) throw new NotFoundException()
     await this.assertOwner(boardId, requestingUsername, board)
 
-    const existing = await this.members.findOne({ where: { boardId, username: targetUsername } })
+    const existing = await this.members.findOne({ boardId, username: targetUsername })
     if (existing) {
       existing.role = role
-      await this.members.save(existing)
+      await existing.save()
       this.gateway.emitToUser(targetUsername, 'role:updated', { boardId, role })
       return existing
     }
 
-    const member = this.members.create({ id: uuid(), boardId, username: targetUsername, role })
-    await this.members.save(member)
+    const member = await this.members.create({ _id: uuid(), boardId, username: targetUsername, role })
 
     if (targetUsername !== requestingUsername) {
       await this.saveAndEmitNotification(
@@ -517,28 +539,26 @@ export class BoardsService {
   }
 
   async removeMember(boardId: string, targetUsername: string, requestingUsername: string) {
-    const board = await this.boards.findOne({ where: { id: boardId } })
+    const board = await this.boards.findOne({ _id: boardId })
     if (!board) throw new NotFoundException()
 
     const isOwner =
       board.owner === requestingUsername ||
-      (await this.members.findOne({ where: { boardId, username: requestingUsername } }))?.role === BoardRole.OWNER
+      (await this.members.findOne({ boardId, username: requestingUsername }))?.role === BoardRole.OWNER
 
     if (targetUsername !== requestingUsername && !isOwner) throw new ForbiddenException()
-    await this.members.delete({ boardId, username: targetUsername })
+    await this.members.deleteOne({ boardId, username: targetUsername })
 
     // Notify the removed user (not when someone leaves voluntarily)
     if (targetUsername !== requestingUsername) {
-      const notif = await this.notifications.save(
-        this.notifications.create({
-          id: uuid(),
-          username: targetUsername,
-          type: 'removed',
-          message: `הוסרת מלוח "${board.title}" על ידי ${requestingUsername}`,
-          boardId,
-          boardTitle: board.title,
-        }),
-      )
+      const notif = await this.notifications.create({
+        _id: uuid(),
+        username: targetUsername,
+        type: 'removed',
+        message: `הוסרת מלוח "${board.title}" על ידי ${requestingUsername}`,
+        boardId,
+        boardTitle: board.title,
+      })
       this.gateway.emitToUser(targetUsername, 'notification:new', {
         id: notif.id, username: notif.username, type: notif.type, message: notif.message,
         board_id: notif.boardId, board_title: notif.boardTitle, read: notif.read, created_at: notif.createdAt,

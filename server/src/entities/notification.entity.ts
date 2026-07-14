@@ -1,28 +1,33 @@
-import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('notifications')
+@Schema({ collection: 'notifications', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class Notification {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column()
+  @Prop({ required: true })
   username: string
 
-  @Column({ default: 'shared' })
+  @Prop({ default: 'shared' })
   type: string
 
-  @Column()
+  @Prop({ required: true })
   message: string
 
-  @Column({ name: 'board_id', default: '' })
+  @Prop({ default: '' })
   boardId: string
 
-  @Column({ name: 'board_title', default: '' })
+  @Prop({ default: '' })
   boardTitle: string
 
-  @Column({ default: false })
+  @Prop({ default: false })
   read: boolean
 
-  @CreateDateColumn({ name: 'created_at' })
+  @Prop({ default: () => new Date() })
   createdAt: Date
 }
+
+export type NotificationDocument = HydratedDocument<Notification>
+export const NotificationSchema = SchemaFactory.createForClass(Notification)
+NotificationSchema.index({ username: 1 })

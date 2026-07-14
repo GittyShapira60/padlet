@@ -1,19 +1,24 @@
-import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('board_visits')
+@Schema({ collection: 'board_visits', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class BoardVisit {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column({ name: 'board_id' })
+  @Prop({ required: true })
   boardId: string
 
-  @Column()
+  @Prop({ required: true })
   username: string
 
-  @CreateDateColumn({ name: 'visited_at' })
+  @Prop({ default: () => new Date() })
   visitedAt: Date
 
-  @Column({ name: 'duration_seconds', default: 0 })
+  @Prop({ default: 0 })
   durationSeconds: number
 }
+
+export type BoardVisitDocument = HydratedDocument<BoardVisit>
+export const BoardVisitSchema = SchemaFactory.createForClass(BoardVisit)
+BoardVisitSchema.index({ boardId: 1 })

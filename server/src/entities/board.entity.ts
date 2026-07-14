@@ -1,49 +1,45 @@
-import { Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn, UpdateDateColumn } from 'typeorm'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 import { BoardLayout } from '../common/enums'
-import { BoardMember } from './board-member.entity'
-import { Post } from './post.entity'
 
-@Entity('boards')
+@Schema({ collection: 'boards', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class Board {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column()
+  @Prop({ required: true })
   title: string
 
-  @Column({ default: '' })
+  @Prop({ default: '' })
   description: string
 
-  @Column({ default: '#f0f4ff' })
+  @Prop({ default: '#f0f4ff' })
   background: string
 
-  @Column({ type: 'varchar', default: BoardLayout.WALL })
+  @Prop({ type: String, default: BoardLayout.WALL })
   layout: BoardLayout
 
-  @Column({ name: 'cover_image', default: '' })
+  @Prop({ default: '' })
   coverImage: string
 
-  @Column({ default: '' })
+  @Prop({ default: '' })
   password: string
 
-  @Column({ default: '' })
+  @Prop({ default: '' })
   owner: string
 
-  @Column({ name: 'is_public', default: false })
+  @Prop({ default: false })
   isPublic: boolean
 
-  @Column({ name: 'timeline_direction', default: 'rtl' })
+  @Prop({ default: 'rtl' })
   timelineDirection: string
 
-  @CreateDateColumn({ name: 'created_at' })
+  @Prop({ default: () => new Date() })
   createdAt: Date
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @Prop({ default: () => new Date() })
   updatedAt: Date
-
-  @OneToMany(() => BoardMember, (m) => m.board, { cascade: true })
-  members: BoardMember[]
-
-  @OneToMany(() => Post, (p) => p.board, { cascade: true })
-  posts: Post[]
 }
+
+export type BoardDocument = HydratedDocument<Board>
+export const BoardSchema = SchemaFactory.createForClass(Board)

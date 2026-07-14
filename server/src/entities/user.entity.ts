@@ -1,20 +1,21 @@
-import { Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn } from 'typeorm'
-import { BoardMember } from './board-member.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('users')
+@Schema({ collection: 'users', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class User {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column({ unique: true })
+  @Prop({ required: true })
   username: string
 
-  @Column({ name: 'password_hash', nullable: true, type: 'varchar' })
+  @Prop({ type: String, default: null })
   passwordHash: string | null
 
-  @CreateDateColumn({ name: 'created_at' })
+  @Prop({ default: () => new Date() })
   createdAt: Date
-
-  @OneToMany(() => BoardMember, (m) => m.user)
-  memberships: BoardMember[]
 }
+
+export type UserDocument = HydratedDocument<User>
+export const UserSchema = SchemaFactory.createForClass(User)
+UserSchema.index({ username: 1 }, { unique: true })

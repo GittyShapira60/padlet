@@ -1,6 +1,6 @@
-import { Notification } from '../../entities'
+import { NotificationDocument } from '../../entities'
 
-export function mapNotification(n: Notification) {
+export function mapNotification(n: NotificationDocument) {
   return {
     id: n.id,
     username: n.username,

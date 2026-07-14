@@ -1,17 +1,24 @@
 import { Test } from '@nestjs/testing'
-import { getRepositoryToken } from '@nestjs/typeorm'
+import { getModelToken } from '@nestjs/mongoose'
 import { Notification } from '../../entities'
 import { NotificationsService } from './notifications.service'
 
-const mockRepo = () => ({
+function makeFindQuery(result: unknown[]) {
+  return {
+    sort: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockResolvedValue(result),
+  }
+}
+
+const mockModel = () => ({
   find: jest.fn(),
-  update: jest.fn(),
-  delete: jest.fn(),
+  updateMany: jest.fn(),
+  deleteOne: jest.fn(),
 })
 
 function makeNotif(overrides: Partial<Notification> = {}): Notification {
   return {
-    id: 'n1',
+    _id: 'n1',
     username: 'alice',
     type: 'shared',
     message: 'You have been shared',
@@ -20,38 +27,35 @@ function makeNotif(overrides: Partial<Notification> = {}): Notification {
     read: false,
     createdAt: new Date('2026-01-01'),
     ...overrides,
-  } as Notification
+  } as unknown as Notification
 }
 
 describe('NotificationsService', () => {
   let service: NotificationsService
-  let repo: ReturnType<typeof mockRepo>
+  let repo: ReturnType<typeof mockModel>
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({
       providers: [
         NotificationsService,
-        { provide: getRepositoryToken(Notification), useFactory: mockRepo },
+        { provide: getModelToken(Notification.name), useFactory: mockModel },
       ],
     }).compile()
 
     service = module.get(NotificationsService)
-    repo = module.get(getRepositoryToken(Notification))
+    repo = module.get(getModelToken(Notification.name))
   })
 
   // ─── findAll ──────────────────────────────────────────────────────────────────
 
   describe('findAll', () => {
     it('returns mapped notifications for a user', async () => {
-      repo.find.mockResolvedValue([makeNotif()])
+      const notif = makeNotif()
+      repo.find.mockReturnValue(makeFindQuery([{ ...notif, id: notif._id }]))
 
       const result = await service.findAll('alice')
 
-      expect(repo.find).toHaveBeenCalledWith({
-        where: { username: 'alice' },
-        order: { createdAt: 'DESC' },
-        take: 50,
-      })
+      expect(repo.find).toHaveBeenCalledWith({ username: 'alice' })
       expect(result).toHaveLength(1)
       expect(result[0]).toEqual({
         id: 'n1',
@@ -66,7 +70,7 @@ describe('NotificationsService', () => {
     })
 
     it('returns empty array when user has no notifications', async () => {
-      repo.find.mockResolvedValue([])
+      repo.find.mockReturnValue(makeFindQuery([]))
       const result = await service.findAll('alice')
       expect(result).toEqual([])
     })
@@ -76,11 +80,11 @@ describe('NotificationsService', () => {
 
   describe('markAllRead', () => {
     it('marks all notifications as read for user', async () => {
-      repo.update.mockResolvedValue({})
+      repo.updateMany.mockResolvedValue({})
 
       const result = await service.markAllRead('alice')
 
-      expect(repo.update).toHaveBeenCalledWith({ username: 'alice' }, { read: true })
+      expect(repo.updateMany).toHaveBeenCalledWith({ username: 'alice' }, { $set: { read: true } })
       expect(result).toEqual({ ok: true })
     })
   })
@@ -89,11 +93,11 @@ describe('NotificationsService', () => {
 
   describe('delete', () => {
     it('deletes a notification by id and username', async () => {
-      repo.delete.mockResolvedValue({})
+      repo.deleteOne.mockResolvedValue({})
 
       await service.delete('n1', 'alice')
 
-      expect(repo.delete).toHaveBeenCalledWith({ id: 'n1', username: 'alice' })
+      expect(repo.deleteOne).toHaveBeenCalledWith({ _id: 'n1', username: 'alice' })
     })
   })
 })

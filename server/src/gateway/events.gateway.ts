@@ -7,8 +7,8 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets'
-import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { InjectModel } from '@nestjs/mongoose'
+import { Model } from 'mongoose'
 import { Server, Socket } from 'socket.io'
 import { v4 as uuid } from 'uuid'
 import { BoardVisit } from '../entities'
@@ -26,7 +26,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   server: Server
 
   constructor(
-    @InjectRepository(BoardVisit) private visits: Repository<BoardVisit>,
+    @InjectModel(BoardVisit.name) private visits: Model<BoardVisit>,
   ) {}
 
   private socketBoardMap = new Map<string, string>()
@@ -133,9 +133,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private saveVisit(boardId: string, username: string, startTime: Date): void {
     const durationSeconds = Math.round((Date.now() - startTime.getTime()) / 1000)
     if (durationSeconds > MIN_VISIT_SECONDS) {
-      this.visits
-        .save(this.visits.create({ id: uuid(), boardId, username, durationSeconds }))
-        .catch(() => {})
+      this.visits.create({ _id: uuid(), boardId, username, durationSeconds }).catch(() => {})
     }
   }
 

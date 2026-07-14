@@ -1,12 +1,12 @@
 import { Test } from '@nestjs/testing'
-import { getRepositoryToken } from '@nestjs/typeorm'
+import { getModelToken } from '@nestjs/mongoose'
 import { BoardVisit } from '../entities'
 import { EventsGateway } from './events.gateway'
 
 const mockRepo = () => ({
   find: jest.fn(),
   findOne: jest.fn(),
-  create: jest.fn((v) => v),
+  create: jest.fn((v) => Promise.resolve(v)),
   save: jest.fn((v) => Promise.resolve(v)),
 })
 
@@ -28,12 +28,12 @@ describe('EventsGateway', () => {
     const module = await Test.createTestingModule({
       providers: [
         EventsGateway,
-        { provide: getRepositoryToken(BoardVisit), useFactory: mockRepo },
+        { provide: getModelToken(BoardVisit.name), useFactory: mockRepo },
       ],
     }).compile()
 
     gateway = module.get(EventsGateway)
-    visitsRepo = module.get(getRepositoryToken(BoardVisit))
+    visitsRepo = module.get(getModelToken(BoardVisit.name))
 
     gateway.server = {
       to: jest.fn().mockReturnThis(),
@@ -84,7 +84,7 @@ describe('EventsGateway', () => {
       gateway.handleLeaveBoard(client, 'board-1')
 
       await new Promise((r) => setTimeout(r, 10))
-      expect(visitsRepo.save).toHaveBeenCalled()
+      expect(visitsRepo.create).toHaveBeenCalled()
     })
 
     it('does not save a visit for very short sessions (<=2 seconds)', () => {
@@ -97,7 +97,7 @@ describe('EventsGateway', () => {
 
       gateway.handleLeaveBoard(client, 'board-1')
 
-      expect(visitsRepo.save).not.toHaveBeenCalled()
+      expect(visitsRepo.create).not.toHaveBeenCalled()
     })
 
     it('clears socket state after leaving', () => {
@@ -124,7 +124,7 @@ describe('EventsGateway', () => {
       gateway.handleDisconnect(client)
 
       await new Promise((r) => setTimeout(r, 10))
-      expect(visitsRepo.save).toHaveBeenCalled()
+      expect(visitsRepo.create).toHaveBeenCalled()
     })
 
     it('clears socket state on disconnect', () => {

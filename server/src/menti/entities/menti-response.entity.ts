@@ -1,23 +1,31 @@
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm'
-import { MentiSession } from './menti-session.entity'
-import { MentiSlide } from './menti-slide.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument, Schema as MongooseSchema } from 'mongoose'
 
-@Entity('menti_responses')
+@Schema({ collection: 'menti_responses', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class MentiResponse {
-  @PrimaryColumn() id: string
-  @Column({ name: 'session_id' }) sessionId: string
-  @Column({ name: 'slide_id' }) slideId: string
-  @Column({ type: 'text', nullable: true }) respondent: string | null
-  @Column({ type: 'jsonb' }) answer: Record<string, unknown>
-  @Column({ name: 'is_answered', default: false }) isAnswered: boolean
+  @Prop({ type: String })
+  _id: string
 
-  @CreateDateColumn({ name: 'created_at' }) createdAt: Date
+  @Prop({ required: true })
+  sessionId: string
 
-  @ManyToOne(() => MentiSession, (s) => s.responses, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'session_id' })
-  session: MentiSession
+  @Prop({ required: true })
+  slideId: string
 
-  @ManyToOne(() => MentiSlide, (s) => s.responses, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'slide_id' })
-  slide: MentiSlide
+  @Prop({ type: String, default: null })
+  respondent: string | null
+
+  @Prop({ type: MongooseSchema.Types.Mixed, required: true })
+  answer: Record<string, unknown>
+
+  @Prop({ default: false })
+  isAnswered: boolean
+
+  @Prop({ default: () => new Date() })
+  createdAt: Date
 }
+
+export type MentiResponseDocument = HydratedDocument<MentiResponse>
+export const MentiResponseSchema = SchemaFactory.createForClass(MentiResponse)
+MentiResponseSchema.index({ sessionId: 1 })
+MentiResponseSchema.index({ slideId: 1 })

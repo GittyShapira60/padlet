@@ -1,18 +1,32 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common'
+import { getModelToken } from '@nestjs/mongoose'
 import { Test } from '@nestjs/testing'
-import { getRepositoryToken } from '@nestjs/typeorm'
 import { BoardRole, PostType } from '../../common/enums'
-import { Board, BoardMember, Comment, Notification, PollOption, PollVote, Post, PostLike } from '../../entities'
+import { Board, BoardMember, Comment, Notification, PollOption, PollVote, Post, PostLike, PostReaction } from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
 import { PostsService } from './posts.service'
 
-const mockRepo = () => ({
-  find: jest.fn(),
+function mockFindResult(result: unknown[] = []) {
+  const p = Promise.resolve(result) as any
+  p.sort = jest.fn().mockResolvedValue(result)
+  return p
+}
+
+function withSave<T extends object>(obj: T): T & { save: jest.Mock } {
+  const withSaveObj = obj as any
+  withSaveObj.save = jest.fn().mockImplementation(function (this: any) {
+    return Promise.resolve(this)
+  })
+  return withSaveObj
+}
+
+const mockModel = () => ({
+  find: jest.fn().mockImplementation(() => mockFindResult([])),
   findOne: jest.fn(),
-  create: jest.fn((v) => v),
-  save: jest.fn((v) => Promise.resolve(v)),
-  remove: jest.fn(),
-  delete: jest.fn(),
+  create: jest.fn().mockImplementation((v: any) => Promise.resolve({ ...v, id: v._id })),
+  insertMany: jest.fn(),
+  deleteOne: jest.fn(),
+  deleteMany: jest.fn(),
 })
 
 const mockGateway = () => ({
@@ -20,15 +34,14 @@ const mockGateway = () => ({
   emitToUser: jest.fn(),
 })
 
-function makePost(overrides: Partial<Post> = {}): Post {
-  return {
+function makePost(overrides: Partial<Post> = {}): any {
+  return withSave({
     id: 'p1', boardId: 'b1', type: PostType.TEXT, content: 'Hello', author: 'alice',
     color: '#fff', x: 0, y: 0, width: 200, likes: 0,
     imageUrl: '', linkUrl: '', linkTitle: '', linkDescription: '', linkImage: '',
     editedBy: '', shape: 'rect', updatedAt: new Date(), createdAt: new Date(),
-    comments: [],
     ...overrides,
-  } as Post
+  })
 }
 
 function makeMember(overrides: Partial<BoardMember> = {}): BoardMember {
@@ -37,41 +50,44 @@ function makeMember(overrides: Partial<BoardMember> = {}): BoardMember {
 
 describe('PostsService', () => {
   let service: PostsService
-  let postsRepo: ReturnType<typeof mockRepo>
-  let commentsRepo: ReturnType<typeof mockRepo>
-  let membersRepo: ReturnType<typeof mockRepo>
-  let notificationsRepo: ReturnType<typeof mockRepo>
-  let likesRepo: ReturnType<typeof mockRepo>
-  let pollOptionsRepo: ReturnType<typeof mockRepo>
-  let pollVotesRepo: ReturnType<typeof mockRepo>
-  let boardsRepo: ReturnType<typeof mockRepo>
+  let postsRepo: ReturnType<typeof mockModel>
+  let commentsRepo: ReturnType<typeof mockModel>
+  let membersRepo: ReturnType<typeof mockModel>
+  let notificationsRepo: ReturnType<typeof mockModel>
+  let likesRepo: ReturnType<typeof mockModel>
+  let reactionsRepo: ReturnType<typeof mockModel>
+  let pollOptionsRepo: ReturnType<typeof mockModel>
+  let pollVotesRepo: ReturnType<typeof mockModel>
+  let boardsRepo: ReturnType<typeof mockModel>
   let gateway: ReturnType<typeof mockGateway>
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({
       providers: [
         PostsService,
-        { provide: getRepositoryToken(Post), useFactory: mockRepo },
-        { provide: getRepositoryToken(Comment), useFactory: mockRepo },
-        { provide: getRepositoryToken(BoardMember), useFactory: mockRepo },
-        { provide: getRepositoryToken(Notification), useFactory: mockRepo },
-        { provide: getRepositoryToken(PostLike), useFactory: mockRepo },
-        { provide: getRepositoryToken(PollOption), useFactory: mockRepo },
-        { provide: getRepositoryToken(PollVote), useFactory: mockRepo },
-        { provide: getRepositoryToken(Board), useFactory: mockRepo },
+        { provide: getModelToken(Post.name), useFactory: mockModel },
+        { provide: getModelToken(Comment.name), useFactory: mockModel },
+        { provide: getModelToken(BoardMember.name), useFactory: mockModel },
+        { provide: getModelToken(Notification.name), useFactory: mockModel },
+        { provide: getModelToken(PostLike.name), useFactory: mockModel },
+        { provide: getModelToken(PostReaction.name), useFactory: mockModel },
+        { provide: getModelToken(PollOption.name), useFactory: mockModel },
+        { provide: getModelToken(PollVote.name), useFactory: mockModel },
+        { provide: getModelToken(Board.name), useFactory: mockModel },
         { provide: EventsGateway, useFactory: mockGateway },
       ],
     }).compile()
 
     service = module.get(PostsService)
-    postsRepo = module.get(getRepositoryToken(Post))
-    commentsRepo = module.get(getRepositoryToken(Comment))
-    membersRepo = module.get(getRepositoryToken(BoardMember))
-    notificationsRepo = module.get(getRepositoryToken(Notification))
-    likesRepo = module.get(getRepositoryToken(PostLike))
-    pollOptionsRepo = module.get(getRepositoryToken(PollOption))
-    pollVotesRepo = module.get(getRepositoryToken(PollVote))
-    boardsRepo = module.get(getRepositoryToken(Board))
+    postsRepo = module.get(getModelToken(Post.name))
+    commentsRepo = module.get(getModelToken(Comment.name))
+    membersRepo = module.get(getModelToken(BoardMember.name))
+    notificationsRepo = module.get(getModelToken(Notification.name))
+    likesRepo = module.get(getModelToken(PostLike.name))
+    reactionsRepo = module.get(getModelToken(PostReaction.name))
+    pollOptionsRepo = module.get(getModelToken(PollOption.name))
+    pollVotesRepo = module.get(getModelToken(PollVote.name))
+    boardsRepo = module.get(getModelToken(Board.name))
     gateway = module.get(EventsGateway)
   })
 
@@ -79,10 +95,8 @@ describe('PostsService', () => {
 
   describe('findAll', () => {
     it('returns mapped posts for a board member', async () => {
-      membersRepo.find.mockResolvedValue([])
       membersRepo.findOne.mockResolvedValue(makeMember())
-      postsRepo.find.mockResolvedValue([makePost()])
-      likesRepo.find.mockResolvedValue([]) // bulk likes fetch via In()
+      postsRepo.find.mockReturnValue(mockFindResult([makePost()]))
 
       const result = await service.findAll('b1', 'alice')
 
@@ -104,12 +118,12 @@ describe('PostsService', () => {
   describe('create', () => {
     it('creates a post and emits post:created event', async () => {
       membersRepo.findOne.mockResolvedValue(makeMember())
-      postsRepo.save.mockResolvedValue(makePost())
+      postsRepo.create.mockResolvedValue(makePost())
 
       const dto = { type: 'text', content: 'Hello' }
       await service.create('b1', dto as any, 'alice')
 
-      expect(postsRepo.save).toHaveBeenCalled()
+      expect(postsRepo.create).toHaveBeenCalled()
       expect(gateway.emitToBoard).toHaveBeenCalledWith('b1', 'post:created', expect.any(Object))
     })
 
@@ -121,8 +135,8 @@ describe('PostsService', () => {
 
     it('creates poll options when poll_options are provided', async () => {
       membersRepo.findOne.mockResolvedValue(makeMember())
-      postsRepo.save.mockResolvedValue(makePost({ type: PostType.POLL }))
-      pollOptionsRepo.save.mockResolvedValue([
+      postsRepo.create.mockResolvedValue(makePost({ type: PostType.POLL }))
+      pollOptionsRepo.insertMany.mockResolvedValue([
         { id: 'o1', optionText: 'Option A', sortOrder: 0 },
         { id: 'o2', optionText: 'Option B', sortOrder: 1 },
       ])
@@ -130,7 +144,7 @@ describe('PostsService', () => {
       const dto = { type: 'poll', content: 'Vote!', poll_options: ['Option A', 'Option B'] }
       const result = await service.create('b1', dto as any, 'alice')
 
-      expect(pollOptionsRepo.save).toHaveBeenCalled()
+      expect(pollOptionsRepo.insertMany).toHaveBeenCalled()
       expect(result.poll_options).toHaveLength(2)
     })
   })
@@ -141,7 +155,6 @@ describe('PostsService', () => {
     it('updates a post and emits post:updated event', async () => {
       postsRepo.findOne.mockResolvedValue(makePost())
       membersRepo.findOne.mockResolvedValue(makeMember())
-      postsRepo.save.mockResolvedValue(makePost({ content: 'Updated' }))
 
       await service.update('p1', { content: 'Updated' } as any, 'alice')
 
@@ -152,7 +165,6 @@ describe('PostsService', () => {
       const post = makePost()
       postsRepo.findOne.mockResolvedValue(post)
       membersRepo.findOne.mockResolvedValue(makeMember())
-      postsRepo.save.mockImplementation((p) => Promise.resolve(p))
 
       await service.update('p1', { content: 'Changed' } as any, 'alice')
 
@@ -175,14 +187,19 @@ describe('PostsService', () => {
   // ─── remove ───────────────────────────────────────────────────────────────────
 
   describe('remove', () => {
-    it('removes a post and emits post:deleted event', async () => {
+    it('removes a post, cascades dependent documents, and emits post:deleted event', async () => {
       postsRepo.findOne.mockResolvedValue(makePost())
       membersRepo.findOne.mockResolvedValue(makeMember())
-      postsRepo.remove.mockResolvedValue({})
+      postsRepo.deleteOne.mockResolvedValue({})
 
       await service.remove('p1', 'alice')
 
-      expect(postsRepo.remove).toHaveBeenCalled()
+      expect(commentsRepo.deleteMany).toHaveBeenCalledWith({ postId: { $in: ['p1'] } })
+      expect(likesRepo.deleteMany).toHaveBeenCalledWith({ postId: { $in: ['p1'] } })
+      expect(reactionsRepo.deleteMany).toHaveBeenCalledWith({ postId: { $in: ['p1'] } })
+      expect(pollVotesRepo.deleteMany).toHaveBeenCalledWith({ postId: { $in: ['p1'] } })
+      expect(pollOptionsRepo.deleteMany).toHaveBeenCalledWith({ postId: { $in: ['p1'] } })
+      expect(postsRepo.deleteOne).toHaveBeenCalledWith({ _id: 'p1' })
       expect(gateway.emitToBoard).toHaveBeenCalledWith('b1', 'post:deleted', 'p1')
     })
 
@@ -200,9 +217,9 @@ describe('PostsService', () => {
     it('returns mapped comments', async () => {
       postsRepo.findOne.mockResolvedValue(makePost())
       membersRepo.findOne.mockResolvedValue(makeMember())
-      commentsRepo.find.mockResolvedValue([
+      commentsRepo.find.mockReturnValue(mockFindResult([
         { id: 'c1', postId: 'p1', content: 'Nice!', author: 'bob', createdAt: new Date() },
-      ])
+      ]))
 
       const result = await service.getComments('p1', 'alice')
 
@@ -223,7 +240,7 @@ describe('PostsService', () => {
     it('adds a comment and emits comment:created event', async () => {
       postsRepo.findOne.mockResolvedValue(makePost())
       membersRepo.findOne.mockResolvedValue(makeMember({ username: 'bob' }))
-      commentsRepo.save.mockResolvedValue({ id: 'c1', postId: 'p1', content: 'Nice', author: 'bob', createdAt: new Date() })
+      commentsRepo.create.mockResolvedValue({ id: 'c1', postId: 'p1', content: 'Nice', author: 'bob', createdAt: new Date() })
 
       await service.addComment('p1', 'Nice', 'bob')
 
@@ -234,10 +251,9 @@ describe('PostsService', () => {
       postsRepo.findOne.mockResolvedValue(makePost({ author: 'alice' }))
       membersRepo.findOne.mockResolvedValue(makeMember({ username: 'bob' }))
       const savedComment = { id: 'c1', postId: 'p1', content: 'Nice', author: 'bob', createdAt: new Date() }
-      commentsRepo.save.mockResolvedValue(savedComment)
+      commentsRepo.create.mockResolvedValue(savedComment)
       const notif = { id: 'n1', username: 'alice', type: 'comment', message: '', boardId: 'b1', boardTitle: '', read: false, createdAt: new Date() }
-      notificationsRepo.save.mockResolvedValue(notif)
-      notificationsRepo.create.mockReturnValue(notif)
+      notificationsRepo.create.mockResolvedValue(notif)
 
       await service.addComment('p1', 'Nice', 'bob')
 
@@ -247,11 +263,11 @@ describe('PostsService', () => {
     it('does not notify when commenter is the post author', async () => {
       postsRepo.findOne.mockResolvedValue(makePost({ author: 'alice' }))
       membersRepo.findOne.mockResolvedValue(makeMember({ username: 'alice' }))
-      commentsRepo.save.mockResolvedValue({ id: 'c1', postId: 'p1', content: 'Self', author: 'alice', createdAt: new Date() })
+      commentsRepo.create.mockResolvedValue({ id: 'c1', postId: 'p1', content: 'Self', author: 'alice', createdAt: new Date() })
 
       await service.addComment('p1', 'Self', 'alice')
 
-      expect(notificationsRepo.save).not.toHaveBeenCalled()
+      expect(notificationsRepo.create).not.toHaveBeenCalled()
     })
 
     it('throws ForbiddenException for viewers', async () => {
@@ -269,12 +285,12 @@ describe('PostsService', () => {
       postsRepo.findOne.mockResolvedValue(makePost({ likes: 0 }))
       membersRepo.findOne.mockResolvedValue(makeMember())
       likesRepo.findOne.mockResolvedValue(null)
-      postsRepo.save.mockImplementation((p) => Promise.resolve(p))
-      likesRepo.find.mockResolvedValue([{ postId: 'p1', username: 'alice' }]) // after-toggle fetch
+      likesRepo.create.mockResolvedValue({ postId: 'p1', username: 'alice' })
+      likesRepo.find.mockReturnValue(mockFindResult([{ postId: 'p1', username: 'alice' }])) // after-toggle fetch
 
       const result = await service.toggleLike('p1', 'alice')
 
-      expect(likesRepo.save).toHaveBeenCalled()
+      expect(likesRepo.create).toHaveBeenCalled()
       expect(result.liked_by_me).toBe(true)
       expect(result.likes).toBe(1)
     })
@@ -284,13 +300,12 @@ describe('PostsService', () => {
       membersRepo.findOne.mockResolvedValue(makeMember())
       const existingLike = { postId: 'p1', username: 'alice' }
       likesRepo.findOne.mockResolvedValue(existingLike)
-      likesRepo.remove.mockResolvedValue({})
-      postsRepo.save.mockImplementation((p) => Promise.resolve(p))
-      likesRepo.find.mockResolvedValue([]) // after-toggle fetch — like was removed
+      likesRepo.deleteOne.mockResolvedValue({})
+      likesRepo.find.mockReturnValue(mockFindResult([])) // after-toggle fetch — like was removed
 
       const result = await service.toggleLike('p1', 'alice')
 
-      expect(likesRepo.remove).toHaveBeenCalledWith(existingLike)
+      expect(likesRepo.deleteOne).toHaveBeenCalledWith({ postId: 'p1', username: 'alice' })
       expect(result.liked_by_me).toBe(false)
       expect(result.likes).toBe(0)
     })
@@ -299,9 +314,8 @@ describe('PostsService', () => {
       postsRepo.findOne.mockResolvedValue(makePost({ likes: 0 }))
       membersRepo.findOne.mockResolvedValue(makeMember())
       likesRepo.findOne.mockResolvedValue({ postId: 'p1', username: 'alice' })
-      likesRepo.remove.mockResolvedValue({})
-      postsRepo.save.mockImplementation((p) => Promise.resolve(p))
-      likesRepo.find.mockResolvedValue([]) // after-toggle fetch
+      likesRepo.deleteOne.mockResolvedValue({})
+      likesRepo.find.mockReturnValue(mockFindResult([])) // after-toggle fetch
 
       const result = await service.toggleLike('p1', 'alice')
 
@@ -313,35 +327,35 @@ describe('PostsService', () => {
 
   describe('vote', () => {
     beforeEach(() => {
-      pollOptionsRepo.find.mockResolvedValue([
+      pollOptionsRepo.find.mockReturnValue(mockFindResult([
         { id: 'o1', optionText: 'Yes', sortOrder: 0 },
         { id: 'o2', optionText: 'No', sortOrder: 1 },
-      ])
-      pollVotesRepo.find.mockResolvedValue([])
+      ]))
+      pollVotesRepo.find.mockReturnValue(mockFindResult([]))
     })
 
     it('creates a new vote when user has not voted yet', async () => {
       postsRepo.findOne.mockResolvedValue(makePost({ type: PostType.POLL }))
       membersRepo.findOne.mockResolvedValue(makeMember())
       pollVotesRepo.findOne.mockResolvedValue(null)
-      pollVotesRepo.save.mockResolvedValue({})
+      pollVotesRepo.create.mockResolvedValue({})
 
       await service.vote('p1', 'o1', 'alice')
 
-      expect(pollVotesRepo.save).toHaveBeenCalled()
+      expect(pollVotesRepo.create).toHaveBeenCalled()
       expect(gateway.emitToBoard).toHaveBeenCalledWith('b1', 'post:updated', expect.any(Object))
     })
 
     it('updates an existing vote', async () => {
       postsRepo.findOne.mockResolvedValue(makePost({ type: PostType.POLL }))
       membersRepo.findOne.mockResolvedValue(makeMember())
-      const existing = { id: 'v1', postId: 'p1', optionId: 'o1', username: 'alice' }
+      const existing = withSave({ id: 'v1', postId: 'p1', optionId: 'o1', username: 'alice' })
       pollVotesRepo.findOne.mockResolvedValue(existing)
-      pollVotesRepo.save.mockResolvedValue({ ...existing, optionId: 'o2' })
 
       await service.vote('p1', 'o2', 'alice')
 
-      expect(pollVotesRepo.save).toHaveBeenCalledWith(expect.objectContaining({ optionId: 'o2' }))
+      expect(existing.save).toHaveBeenCalled()
+      expect(existing.optionId).toBe('o2')
     })
   })
 })

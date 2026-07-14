@@ -1,23 +1,24 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryColumn } from 'typeorm'
-import { Post } from './post.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('comments')
+@Schema({ collection: 'comments', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class Comment {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column({ name: 'post_id' })
+  @Prop({ required: true })
   postId: string
 
-  @Column()
+  @Prop({ required: true })
   content: string
 
-  @Column({ default: 'אנונימי' })
+  @Prop({ default: 'אנונימי' })
   author: string
 
-  @CreateDateColumn({ name: 'created_at' })
+  @Prop({ default: () => new Date() })
   createdAt: Date
-
-  @ManyToOne(() => Post, (p) => p.comments, { onDelete: 'CASCADE' })
-  post: Post
 }
+
+export type CommentDocument = HydratedDocument<Comment>
+export const CommentSchema = SchemaFactory.createForClass(Comment)
+CommentSchema.index({ postId: 1 })

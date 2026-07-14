@@ -1,24 +1,36 @@
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryColumn } from 'typeorm'
-import { MentiPresentation } from './menti-presentation.entity'
-import { MentiResponse } from './menti-response.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('menti_sessions')
+@Schema({ collection: 'menti_sessions', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class MentiSession {
-  @PrimaryColumn() id: string
-  @Column({ name: 'presentation_id' }) presentationId: string
-  @Column({ name: 'current_slide_index', type: 'int', default: 0 }) currentSlideIndex: number
-  @Column({ name: 'is_active', default: true }) isActive: boolean
-  @Column({ name: 'is_voting_open', default: true }) isVotingOpen: boolean
-  @Column({ name: 'results_visible', default: true }) resultsVisible: boolean
-  @Column({ name: 'self_paced', default: false }) selfPaced: boolean
+  @Prop({ type: String })
+  _id: string
 
-  @CreateDateColumn({ name: 'started_at' }) startedAt: Date
-  @Column({ name: 'ended_at', type: 'timestamptz', nullable: true }) endedAt: Date | null
+  @Prop({ required: true })
+  presentationId: string
 
-  @ManyToOne(() => MentiPresentation, (p) => p.sessions, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'presentation_id' })
-  presentation: MentiPresentation
+  @Prop({ default: 0 })
+  currentSlideIndex: number
 
-  @OneToMany(() => MentiResponse, (r) => r.session, { cascade: true })
-  responses: MentiResponse[]
+  @Prop({ default: true })
+  isActive: boolean
+
+  @Prop({ default: true })
+  isVotingOpen: boolean
+
+  @Prop({ default: true })
+  resultsVisible: boolean
+
+  @Prop({ default: false })
+  selfPaced: boolean
+
+  @Prop({ default: () => new Date() })
+  startedAt: Date
+
+  @Prop({ type: Date, default: null })
+  endedAt: Date | null
 }
+
+export type MentiSessionDocument = HydratedDocument<MentiSession>
+export const MentiSessionSchema = SchemaFactory.createForClass(MentiSession)
+MentiSessionSchema.index({ presentationId: 1 })

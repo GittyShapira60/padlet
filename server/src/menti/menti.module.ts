@@ -1,13 +1,23 @@
 import { Module } from '@nestjs/common'
-import { TypeOrmModule } from '@nestjs/typeorm'
-import { MentiPresentation, MentiResponse, MentiSession, MentiSlide } from './entities'
+import { MongooseModule } from '@nestjs/mongoose'
+import {
+  MentiPresentation, MentiPresentationSchema,
+  MentiResponse, MentiResponseSchema,
+  MentiSession, MentiSessionSchema,
+  MentiSlide, MentiSlideSchema,
+} from './entities'
 import { GatewayModule } from '../gateway/gateway.module'
 import { MentiController } from './menti.controller'
 import { MentiService } from './menti.service'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([MentiPresentation, MentiSlide, MentiSession, MentiResponse]),
+    MongooseModule.forFeature([
+      { name: MentiPresentation.name, schema: MentiPresentationSchema },
+      { name: MentiSlide.name, schema: MentiSlideSchema },
+      { name: MentiSession.name, schema: MentiSessionSchema },
+      { name: MentiResponse.name, schema: MentiResponseSchema },
+    ]),
     GatewayModule,
   ],
   providers: [MentiService],

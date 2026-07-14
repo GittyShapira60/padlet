@@ -1,7 +1,7 @@
 import { formatDate } from './date.util'
 import { mapNotification } from './notification.util'
 import { generatePassword } from './random.util'
-import { Notification } from '../../entities'
+import { NotificationDocument } from '../../entities'
 
 // ─── generatePassword ─────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ describe('formatDate', () => {
 describe('mapNotification', () => {
   const createdAt = new Date('2026-01-01')
 
-  const notif: Notification = {
+  const notif = {
     id: 'n1',
     username: 'alice',
     type: 'shared',
@@ -62,7 +62,7 @@ describe('mapNotification', () => {
     boardTitle: 'My Board',
     read: false,
     createdAt,
-  } as Notification
+  } as unknown as NotificationDocument
 
   it('maps all fields to snake_case response shape', () => {
     expect(mapNotification(notif)).toEqual({
@@ -78,12 +78,12 @@ describe('mapNotification', () => {
   })
 
   it('preserves the read flag when true', () => {
-    const read = { ...notif, read: true }
+    const read = { ...notif, read: true } as unknown as NotificationDocument
     expect(mapNotification(read).read).toBe(true)
   })
 
   it('maps null boardTitle to null', () => {
-    const noTitle = { ...notif, boardTitle: null as any }
+    const noTitle = { ...notif, boardTitle: null as any } as unknown as NotificationDocument
     expect(mapNotification(noTitle).board_title).toBeNull()
   })
 })

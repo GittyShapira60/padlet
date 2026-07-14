@@ -1,18 +1,22 @@
-import { Entity, ManyToOne, PrimaryColumn } from 'typeorm'
-import { Post } from './post.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-// PK = (post_id, username, emoji) — one row per user per emoji type
-@Entity('post_reactions')
+// One document per (postId, username, emoji) — one row per user per emoji type
+@Schema({ collection: 'post_reactions', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class PostReaction {
-  @PrimaryColumn({ name: 'post_id' })
+  @Prop({ type: String })
+  _id: string
+
+  @Prop({ required: true })
   postId: string
 
-  @PrimaryColumn()
+  @Prop({ required: true })
   username: string
 
-  @PrimaryColumn()
+  @Prop({ required: true })
   emoji: string
-
-  @ManyToOne(() => Post, { onDelete: 'CASCADE' })
-  post: Post
 }
+
+export type PostReactionDocument = HydratedDocument<PostReaction>
+export const PostReactionSchema = SchemaFactory.createForClass(PostReaction)
+PostReactionSchema.index({ postId: 1, username: 1, emoji: 1 }, { unique: true })

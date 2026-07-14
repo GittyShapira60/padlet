@@ -1,28 +1,24 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryColumn, Unique } from 'typeorm'
-import { PollOption } from './poll-option.entity'
-import { Post } from './post.entity'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 
-@Entity('poll_votes')
-@Unique(['postId', 'username'])
+@Schema({ collection: 'poll_votes', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class PollVote {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column({ name: 'post_id' })
+  @Prop({ required: true })
   postId: string
 
-  @Column({ name: 'option_id' })
+  @Prop({ required: true })
   optionId: string
 
-  @Column()
+  @Prop({ required: true })
   username: string
 
-  @CreateDateColumn({ name: 'created_at' })
+  @Prop({ default: () => new Date() })
   createdAt: Date
-
-  @ManyToOne(() => Post, { onDelete: 'CASCADE' })
-  post: Post
-
-  @ManyToOne(() => PollOption, { onDelete: 'CASCADE' })
-  option: PollOption
 }
+
+export type PollVoteDocument = HydratedDocument<PollVote>
+export const PollVoteSchema = SchemaFactory.createForClass(PollVote)
+PollVoteSchema.index({ postId: 1, username: 1 }, { unique: true })

@@ -1,78 +1,67 @@
-import {
-  Column,
-  CreateDateColumn,
-  Entity,
-  ManyToOne,
-  OneToMany,
-  PrimaryColumn,
-  UpdateDateColumn,
-} from 'typeorm'
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { HydratedDocument } from 'mongoose'
 import { PostType } from '../common/enums'
-import { Board } from './board.entity'
-import { Comment } from './comment.entity'
 
-@Entity('posts')
+@Schema({ collection: 'posts', toJSON: { virtuals: true }, toObject: { virtuals: true }, versionKey: false })
 export class Post {
-  @PrimaryColumn()
-  id: string
+  @Prop({ type: String })
+  _id: string
 
-  @Column({ name: 'board_id' })
+  @Prop({ required: true })
   boardId: string
 
-  @Column({ type: 'varchar', default: PostType.TEXT })
+  @Prop({ type: String, default: PostType.TEXT })
   type: PostType
 
-  @Column({ default: '' })
+  @Prop({ default: '' })
   content: string
 
-  @Column({ default: 'אנונימי' })
+  @Prop({ default: 'אנונימי' })
   author: string
 
-  @Column({ default: '#fef08a' })
+  @Prop({ default: '#fef08a' })
   color: string
 
-  @Column({ type: 'float8', default: 100 })
+  @Prop({ default: 100 })
   x: number
 
-  @Column({ type: 'float8', default: 100 })
+  @Prop({ default: 100 })
   y: number
 
-  @Column({ type: 'float8', default: 220 })
+  @Prop({ default: 220 })
   width: number
 
-  @Column({ default: 0 })
+  @Prop({ default: 0 })
   likes: number
 
-  @Column({ name: 'image_url', default: '' })
+  @Prop({ default: '' })
   imageUrl: string
 
-  @Column({ name: 'link_url', default: '' })
+  @Prop({ default: '' })
   linkUrl: string
 
-  @Column({ name: 'link_title', default: '' })
+  @Prop({ default: '' })
   linkTitle: string
 
-  @Column({ name: 'link_description', default: '' })
+  @Prop({ default: '' })
   linkDescription: string
 
-  @Column({ name: 'link_image', default: '' })
+  @Prop({ default: '' })
   linkImage: string
 
-  @Column({ name: 'edited_by', default: '' })
+  @Prop({ default: '' })
   editedBy: string
 
-  @Column({ default: 'rect' })
+  @Prop({ default: 'rect' })
   shape: string
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @Prop({ default: () => new Date() })
   updatedAt: Date
 
-  @CreateDateColumn({ name: 'created_at' })
+  @Prop({ default: () => new Date() })
   createdAt: Date
-
-  @ManyToOne(() => Board, (b) => b.posts, { onDelete: 'CASCADE' })
-  board: Board
-
-  @OneToMany(() => Comment, (c) => c.post, { cascade: true })
-  comments: Comment[]
 }
+
+export type PostDocument = HydratedDocument<Post>
+export const PostSchema = SchemaFactory.createForClass(Post)
+PostSchema.index({ boardId: 1 })

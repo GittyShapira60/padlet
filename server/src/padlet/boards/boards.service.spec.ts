@@ -1,19 +1,25 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common'
+import { getModelToken } from '@nestjs/mongoose'
 import { Test } from '@nestjs/testing'
-import { getRepositoryToken } from '@nestjs/typeorm'
 import { BoardRole } from '../../common/enums'
-import { Board, BoardMember, BoardVisit, Notification, Post } from '../../entities'
+import { Board, BoardMember, BoardVisit, Comment, Notification, PollOption, PollVote, Post, PostLike, PostReaction } from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
 import { BoardsService } from './boards.service'
 
-const mockRepo = () => ({
-  find: jest.fn(),
+function mockFindResult(result: unknown[] = []) {
+  const p = Promise.resolve(result) as any
+  p.sort = jest.fn().mockResolvedValue(result)
+  return p
+}
+
+const mockModel = () => ({
+  find: jest.fn().mockImplementation(() => mockFindResult([])),
   findOne: jest.fn(),
-  create: jest.fn((v) => v),
-  save: jest.fn((v) => Promise.resolve(v)),
-  delete: jest.fn(),
-  count: jest.fn(),
-  createQueryBuilder: jest.fn(),
+  create: jest.fn().mockImplementation((v: any) => Promise.resolve({ ...v, id: v._id })),
+  insertMany: jest.fn(),
+  deleteOne: jest.fn(),
+  deleteMany: jest.fn(),
+  aggregate: jest.fn().mockResolvedValue([]),
 })
 
 const mockGateway = () => ({
@@ -21,42 +27,57 @@ const mockGateway = () => ({
   emitToUser: jest.fn(),
 })
 
-function makeBoard(overrides: Partial<Board> = {}): Board {
-  return { id: 'b1', title: 'Test Board', owner: 'alice', isPublic: false, password: '', members: [], ...overrides } as Board
+function makeBoard(overrides: Record<string, unknown> = {}): any {
+  const data = { id: 'b1', title: 'Test Board', owner: 'alice', isPublic: false, password: '', layout: 'wall', ...overrides }
+  return {
+    ...data,
+    toObject: jest.fn().mockReturnValue({ ...data }),
+    save: jest.fn().mockImplementation(function (this: any) {
+      return Promise.resolve(this)
+    }),
+  }
 }
 
-function makeMember(overrides: Partial<BoardMember> = {}): BoardMember {
-  return { id: 'm1', boardId: 'b1', username: 'alice', role: BoardRole.OWNER, ...overrides } as BoardMember
+function makeMember(overrides: Record<string, unknown> = {}): any {
+  return {
+    id: 'm1', boardId: 'b1', username: 'alice', role: BoardRole.OWNER, ...overrides,
+    save: jest.fn().mockImplementation(function (this: any) {
+      return Promise.resolve(this)
+    }),
+  }
 }
 
 describe('BoardsService', () => {
   let service: BoardsService
-  let boards: ReturnType<typeof mockRepo>
-  let members: ReturnType<typeof mockRepo>
-  let posts: ReturnType<typeof mockRepo>
-  let notifications: ReturnType<typeof mockRepo>
-  let boardVisits: ReturnType<typeof mockRepo>
+  let boards: ReturnType<typeof mockModel>
+  let members: ReturnType<typeof mockModel>
+  let posts: ReturnType<typeof mockModel>
+  let notifications: ReturnType<typeof mockModel>
   let gateway: ReturnType<typeof mockGateway>
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({
       providers: [
         BoardsService,
-        { provide: getRepositoryToken(Board), useFactory: mockRepo },
-        { provide: getRepositoryToken(BoardMember), useFactory: mockRepo },
-        { provide: getRepositoryToken(BoardVisit), useFactory: mockRepo },
-        { provide: getRepositoryToken(Post), useFactory: mockRepo },
-        { provide: getRepositoryToken(Notification), useFactory: mockRepo },
+        { provide: getModelToken(Board.name), useFactory: mockModel },
+        { provide: getModelToken(BoardMember.name), useFactory: mockModel },
+        { provide: getModelToken(BoardVisit.name), useFactory: mockModel },
+        { provide: getModelToken(Post.name), useFactory: mockModel },
+        { provide: getModelToken(Notification.name), useFactory: mockModel },
+        { provide: getModelToken(PollOption.name), useFactory: mockModel },
+        { provide: getModelToken(Comment.name), useFactory: mockModel },
+        { provide: getModelToken(PostLike.name), useFactory: mockModel },
+        { provide: getModelToken(PostReaction.name), useFactory: mockModel },
+        { provide: getModelToken(PollVote.name), useFactory: mockModel },
         { provide: EventsGateway, useFactory: mockGateway },
       ],
     }).compile()
 
     service = module.get(BoardsService)
-    boards = module.get(getRepositoryToken(Board))
-    members = module.get(getRepositoryToken(BoardMember))
-    posts = module.get(getRepositoryToken(Post))
-    notifications = module.get(getRepositoryToken(Notification))
-    boardVisits = module.get(getRepositoryToken(BoardVisit))
+    boards = module.get(getModelToken(Board.name))
+    members = module.get(getModelToken(BoardMember.name))
+    posts = module.get(getModelToken(Post.name))
+    notifications = module.get(getModelToken(Notification.name))
     gateway = module.get(EventsGateway)
   })
 
@@ -69,21 +90,9 @@ describe('BoardsService', () => {
 
     it('returns boards with my_role and post_count', async () => {
       const membership = makeMember()
-      members.find.mockResolvedValue([membership])
-
-      const qb = {
-        whereInIds: jest.fn().mockReturnThis(),
-        leftJoinAndSelect: jest.fn().mockReturnThis(),
-        orderBy: jest.fn().mockReturnThis(),
-        getMany: jest.fn().mockResolvedValue([makeBoard()]),
-        select: jest.fn().mockReturnThis(),
-        addSelect: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        groupBy: jest.fn().mockReturnThis(),
-        getRawMany: jest.fn().mockResolvedValue([{ boardId: 'b1', count: '3' }]),
-      }
-      boards.createQueryBuilder.mockReturnValue(qb)
-      posts.createQueryBuilder.mockReturnValue(qb)
+      members.find.mockResolvedValueOnce([membership]).mockResolvedValueOnce([membership])
+      boards.find.mockReturnValue(mockFindResult([makeBoard()]))
+      posts.aggregate.mockResolvedValue([{ _id: 'b1', count: 3 }])
 
       const result = await service.findAll('alice')
 
@@ -101,8 +110,9 @@ describe('BoardsService', () => {
     })
 
     it('returns board with my_role for a member', async () => {
-      const board = makeBoard({ members: [makeMember()] })
+      const board = makeBoard()
       boards.findOne.mockResolvedValue(board)
+      members.find.mockResolvedValue([makeMember()])
 
       const result = await service.findOne('b1', 'alice')
 
@@ -110,9 +120,9 @@ describe('BoardsService', () => {
     })
 
     it('returns board as VIEWER for public boards when user is not a member', async () => {
-      const board = makeBoard({ isPublic: true, members: [] })
+      const board = makeBoard({ isPublic: true })
       boards.findOne.mockResolvedValue(board)
-      members.findOne.mockResolvedValue(null)
+      members.find.mockResolvedValue([])
 
       const result = await service.findOne('b1', 'stranger')
 
@@ -120,9 +130,9 @@ describe('BoardsService', () => {
     })
 
     it('throws ForbiddenException for private board when user is not a member', async () => {
-      const board = makeBoard({ isPublic: false, members: [] })
+      const board = makeBoard({ isPublic: false })
       boards.findOne.mockResolvedValue(board)
-      members.findOne.mockResolvedValue(null)
+      members.find.mockResolvedValue([])
 
       await expect(service.findOne('b1', 'stranger')).rejects.toThrow(ForbiddenException)
     })
@@ -132,13 +142,13 @@ describe('BoardsService', () => {
   describe('create', () => {
     it('creates a board and an owner membership', async () => {
       const dto = { title: 'My Board', isPublic: false }
-      boards.save.mockResolvedValue({ id: 'b1', ...dto, owner: 'alice' })
-      members.save.mockResolvedValue({})
+      boards.create.mockResolvedValue({ id: 'b1', ...dto, owner: 'alice' })
+      members.create.mockResolvedValue({})
 
       await service.create(dto as any, 'alice')
 
-      expect(boards.save).toHaveBeenCalled()
-      expect(members.save).toHaveBeenCalledWith(
+      expect(boards.create).toHaveBeenCalled()
+      expect(members.create).toHaveBeenCalledWith(
         expect.objectContaining({ role: BoardRole.OWNER, username: 'alice' }),
       )
     })
@@ -154,7 +164,6 @@ describe('BoardsService', () => {
     it('updates board and emits event when owner', async () => {
       const board = makeBoard()
       boards.findOne.mockResolvedValue(board)
-      boards.save.mockResolvedValue({ ...board, title: 'Updated' })
 
       await service.update('b1', { title: 'Updated' } as any, 'alice')
 
@@ -178,7 +187,7 @@ describe('BoardsService', () => {
 
       await service.remove('b1', 'alice')
 
-      expect(boards.delete).toHaveBeenCalledWith('b1')
+      expect(boards.deleteOne).toHaveBeenCalledWith({ _id: 'b1' })
     })
 
     it('throws ForbiddenException when non-owner tries to delete', async () => {
@@ -204,14 +213,13 @@ describe('BoardsService', () => {
         makeMember({ id: 'm2', username: 'bob', role: BoardRole.WRITER }),
       ])
       const notif = { id: 'n1', username: 'bob', type: 'password_reset', message: '', boardId: 'b1', boardTitle: 'Test Board', read: false, createdAt: new Date() }
-      notifications.save.mockResolvedValue(notif)
-      notifications.create.mockReturnValue(notif)
+      notifications.create.mockResolvedValue(notif)
 
       const result = await service.resetPassword('b1', 'alice')
 
       expect(typeof result.password).toBe('string')
       expect(result.password).toHaveLength(6)
-      expect(boards.save).toHaveBeenCalled()
+      expect(board.save).toHaveBeenCalled()
     })
 
     it('throws NotFoundException when board does not exist', async () => {
@@ -228,7 +236,7 @@ describe('BoardsService', () => {
 
   describe('getMembers', () => {
     it('returns members of a board', async () => {
-      const board = makeBoard({ members: [makeMember()] })
+      const board = makeBoard()
       boards.findOne.mockResolvedValue(board)
       members.find.mockResolvedValue([makeMember()])
 
@@ -243,27 +251,25 @@ describe('BoardsService', () => {
     it('adds a new member and sends a notification', async () => {
       const board = makeBoard()
       boards.findOne.mockResolvedValue(board)
-      members.findOne.mockResolvedValueOnce(null) 
+      members.findOne.mockResolvedValueOnce(null)
       const notif = { id: 'n1', username: 'bob', type: 'shared', message: '', boardId: 'b1', boardTitle: 'Test Board', read: false, createdAt: new Date() }
-      notifications.save.mockResolvedValue(notif)
-      notifications.create.mockReturnValue(notif)
+      notifications.create.mockResolvedValue(notif)
 
       await service.addMember('b1', 'bob', BoardRole.WRITER, 'alice')
 
-      expect(members.save).toHaveBeenCalled()
+      expect(members.create).toHaveBeenCalled()
       expect(gateway.emitToUser).toHaveBeenCalledWith('bob', 'notification:new', expect.any(Object))
     })
 
     it('updates role when member already exists', async () => {
       boards.findOne.mockResolvedValue(makeBoard())
-      members.findOne.mockResolvedValueOnce(makeMember({ username: 'bob', role: BoardRole.VIEWER })) 
-      members.save.mockResolvedValue({})
+      const existingMember = makeMember({ username: 'bob', role: BoardRole.VIEWER })
+      members.findOne.mockResolvedValueOnce(existingMember)
 
       await service.addMember('b1', 'bob', BoardRole.WRITER, 'alice')
 
-      expect(members.save).toHaveBeenCalledWith(
-        expect.objectContaining({ role: BoardRole.WRITER }),
-      )
+      expect(existingMember.save).toHaveBeenCalled()
+      expect(existingMember.role).toBe(BoardRole.WRITER)
     })
 
     it('throws ForbiddenException when non-owner tries to add member', async () => {
@@ -281,21 +287,21 @@ describe('BoardsService', () => {
     it('allows owner to remove a member', async () => {
       boards.findOne.mockResolvedValue(makeBoard())
       members.findOne.mockResolvedValue(makeMember())
-      members.delete = jest.fn().mockResolvedValue({})
+      members.deleteOne.mockResolvedValue({})
 
       await service.removeMember('b1', 'bob', 'alice')
 
-      expect(members.delete).toHaveBeenCalledWith({ boardId: 'b1', username: 'bob' })
+      expect(members.deleteOne).toHaveBeenCalledWith({ boardId: 'b1', username: 'bob' })
     })
 
     it('allows a member to remove themselves', async () => {
       boards.findOne.mockResolvedValue(makeBoard())
       members.findOne.mockResolvedValue(makeMember({ username: 'bob', role: BoardRole.WRITER }))
-      members.delete = jest.fn().mockResolvedValue({})
+      members.deleteOne.mockResolvedValue({})
 
       await service.removeMember('b1', 'bob', 'bob')
 
-      expect(members.delete).toHaveBeenCalledWith({ boardId: 'b1', username: 'bob' })
+      expect(members.deleteOne).toHaveBeenCalledWith({ boardId: 'b1', username: 'bob' })
     })
 
     it('throws ForbiddenException when non-owner tries to remove another member', async () => {
