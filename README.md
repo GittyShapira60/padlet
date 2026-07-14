@@ -11,7 +11,6 @@
 
 ```
 JWT_SECRET=מחרוזת_ארוכה_ואקראית_לפחות_32_תווים
-POSTGRES_PASSWORD=סיסמה_לבסיס_הנתונים
 ```
 
 2. הרץ:
@@ -29,12 +28,12 @@ docker compose up --build
 | משתנה | נדרש | תיאור |
 |---|---|---|
 | `JWT_SECRET` | כן | מפתח סודי לחתימת טוקני JWT. לפחות 32 תווים אקראיים |
-| `POSTGRES_PASSWORD` | כן | סיסמה לבסיס הנתונים PostgreSQL |
 
 ### ערכי ברירת מחדל (לא נדרשים ב-.env)
 
 | משתנה | ברירת מחדל | תיאור |
 |---|---|---|
+| `MONGODB_URI` | `mongodb://localhost:27017/padlet_dev` | כתובת החיבור ל-MongoDB (בתוך Docker: `mongodb://mongo:27017/padlet_dev`) |
 | `PORT` | `3001` | פורט השרת |
 | `FRONTEND_URL` | `http://localhost:5173` | כתובת הלקוח (ל-CORS) |
 
@@ -46,4 +45,4 @@ docker compose up --build
 |---|---|---|
 | `client` | 5173 | React (Vite) — בנוי לפרודקשן ומוגש כקבצים סטטיים |
 | `server` | 3001 | NestJS API + WebSocket |
-| `postgres` | 5433 | PostgreSQL 16 |
+| `mongo` | 27017 | MongoDB 7 |
