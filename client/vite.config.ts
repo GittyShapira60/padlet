@@ -11,7 +11,6 @@ export default defineConfig({
     proxy: {
       '/api':      { target: API_TARGET, changeOrigin: true },
       '/auth':     { target: API_TARGET, changeOrigin: true },
-      '/uploads':  { target: API_TARGET, changeOrigin: true },
       '/socket.io': { target: API_TARGET, ws: true },
     },
   },

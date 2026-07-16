@@ -19,6 +19,7 @@ import {
   PostReaction,
 } from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
+import { deleteS3ObjectByUrl } from '../../common/s3/s3.util'
 import { CreateBoardDto } from './dto/create-board.dto'
 import { UpdateBoardDto } from './dto/update-board.dto'
 
@@ -165,7 +166,8 @@ export class BoardsService {
       (await this.members.findOne({ boardId: id, username }))?.role === BoardRole.OWNER
     if (!isOwner) throw new ForbiddenException('Only owner can delete')
 
-    const postIds = (await this.posts.find({ boardId: id })).map((p) => p.id)
+    const postsToDelete = await this.posts.find({ boardId: id })
+    const postIds = postsToDelete.map((p) => p.id)
     await Promise.all([
       this.comments.deleteMany({ postId: { $in: postIds } }),
       this.postLikes.deleteMany({ postId: { $in: postIds } }),
@@ -176,6 +178,7 @@ export class BoardsService {
     await this.posts.deleteMany({ boardId: id })
     await this.members.deleteMany({ boardId: id })
     await this.boards.deleteOne({ _id: id })
+    await Promise.all(postsToDelete.map((p) => deleteS3ObjectByUrl(p.imageUrl)))
   }
 
   // ─── Duplicate ────────────────────────────────────────────────────────────────

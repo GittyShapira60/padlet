@@ -8,13 +8,11 @@ import {
   UseInterceptors,
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
-import { createWriteStream, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
-import { pipeline } from 'node:stream/promises'
+import { PutObjectCommand } from '@aws-sdk/client-s3'
+import { memoryStorage } from 'multer'
+import { v4 as uuid } from 'uuid'
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard'
-
-const UPLOADS_DIR = join(process.cwd(), 'uploads')
-mkdirSync(UPLOADS_DIR, { recursive: true })
+import { buildS3Url, S3_BUCKET, s3Client } from '../../common/s3/s3.util'
 
 @Controller('api')
 @UseGuards(JwtAuthGuard)
@@ -22,13 +20,24 @@ export class UploadsController {
   @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
-      dest: UPLOADS_DIR,
+      storage: memoryStorage(),
       limits: { fileSize: 20 * 1024 * 1024 },
     }),
   )
-  upload(@UploadedFile() file: Express.Multer.File) {
+  async upload(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded')
-    return { url: `/uploads/${file.filename}` }
+
+    const key = `${uuid()}-${file.originalname}`
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+      }),
+    )
+
+    return { url: buildS3Url(key) }
   }
 
   @Post('link-preview')

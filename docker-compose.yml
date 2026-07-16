@@ -29,6 +29,11 @@ services:
       MONGODB_URI: mongodb://mongo:27017/padlet_dev
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       NODE_ENV: production
+      AWS_REGION: ${AWS_REGION}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_S3_PUBLIC_URL: ${AWS_S3_PUBLIC_URL:-}
     ports:
       - '3001:3001'
 

@@ -16,6 +16,7 @@ import {
   PostReaction,
 } from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
+import { deleteS3ObjectByUrl } from '../../common/s3/s3.util'
 import { CreatePostDto } from './dto/create-post.dto'
 import { UpdatePostDto } from './dto/update-post.dto'
 
@@ -257,6 +258,7 @@ export class PostsService {
     this.assertWritePermission(m.role)
     await this.deletePostDependencies([postId])
     await this.posts.deleteOne({ _id: postId })
+    await deleteS3ObjectByUrl(post.imageUrl)
     this.gateway.emitToBoard(post.boardId, 'post:deleted', postId)
   }
 
