@@ -1,0 +1,52 @@
+version: '3.9'
+
+services:
+
+  mongo:
+    image: mongo:7
+    container_name: padlet_mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - '27017:27017'
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: padlet_server
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/padlet_dev
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
+      NODE_ENV: production
+      AWS_REGION: ${AWS_REGION}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_S3_PUBLIC_URL: ${AWS_S3_PUBLIC_URL:-}
+    ports:
+      - '3001:3001'
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: padlet_client
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - '5173:80'
+
+volumes:
+  mongo_data:
