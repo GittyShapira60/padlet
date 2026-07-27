@@ -12,7 +12,7 @@ import { PutObjectCommand } from '@aws-sdk/client-s3'
 import { memoryStorage } from 'multer'
 import { v4 as uuid } from 'uuid'
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard'
-import { buildS3Url, S3_BUCKET, s3Client } from '../../common/s3/s3.util'
+import { getSignedImageUrl, S3_BUCKET, s3Client } from '../../common/s3/s3.util'
 
 @Controller('api')
 @UseGuards(JwtAuthGuard)
@@ -37,7 +37,9 @@ export class UploadsController {
       }),
     )
 
-    return { url: buildS3Url(key) }
+    // `key` is what gets persisted on the post; `url` is a short-lived signed
+    // preview link for the create-post modal only, and must never be stored.
+    return { key, url: await getSignedImageUrl(key) }
   }
 
   @Post('link-preview')

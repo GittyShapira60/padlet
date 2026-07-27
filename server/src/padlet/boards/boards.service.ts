@@ -19,7 +19,7 @@ import {
   PostReaction,
 } from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
-import { deleteS3ObjectByUrl } from '../../common/s3/s3.util'
+import { deleteS3Object } from '../../common/s3/s3.util'
 import { CreateBoardDto } from './dto/create-board.dto'
 import { UpdateBoardDto } from './dto/update-board.dto'
 
@@ -178,7 +178,7 @@ export class BoardsService {
     await this.posts.deleteMany({ boardId: id })
     await this.members.deleteMany({ boardId: id })
     await this.boards.deleteOne({ _id: id })
-    await Promise.all(postsToDelete.map((p) => deleteS3ObjectByUrl(p.imageUrl)))
+    await Promise.all(postsToDelete.map((p) => deleteS3Object(p.imageUrl)))
   }
 
   // ─── Duplicate ────────────────────────────────────────────────────────────────

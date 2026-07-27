@@ -29,6 +29,7 @@ export default function CreatePostModal({ onClose, onCreate }: Props) {
   const [content, setContent] = useState('');
   const [color, setColor] = useState(POST_COLORS[0]);
   const [imageUrl, setImageUrl] = useState('');
+  const [imageKey, setImageKey] = useState('');
   const [uploading, setUploading] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [linkDescription, setLinkDescription] = useState('');
@@ -51,7 +52,10 @@ export default function CreatePostModal({ onClose, onCreate }: Props) {
       formData.append('file', file);
       const res = await fetch(`${API}/api/upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
       const data = await res.json();
+      // data.url is a short-lived signed preview link; data.key is the permanent
+      // reference that must be persisted (and re-signed on every future read)
       setImageUrl(data.url);
+      setImageKey(data.key);
     } finally {
       setUploading(false);
     }
@@ -87,8 +91,8 @@ export default function CreatePostModal({ onClose, onCreate }: Props) {
       if (!content.trim()) return;
       onCreate({ content: content.trim(), type: 'text', color });
     } else if (tab === 'image') {
-      if (!imageUrl) return;
-      onCreate({ content: content || 'תמונה', type: 'image', color, image_url: imageUrl });
+      if (!imageKey) return;
+      onCreate({ content: content || 'תמונה', type: 'image', color, image_url: imageKey });
     } else if (tab === 'link') {
       if (!linkUrl) return;
       onCreate({
@@ -117,7 +121,7 @@ export default function CreatePostModal({ onClose, onCreate }: Props) {
 
   const canSubmit =
     (tab === 'text' && content.trim()) ||
-    (tab === 'image' && imageUrl) ||
+    (tab === 'image' && imageKey) ||
     (tab === 'link' && linkUrl.trim()) ||
     (tab === 'poll' && pollQuestion.trim() && pollOptions.filter(o => o.trim()).length >= 2);
 
@@ -181,7 +185,7 @@ export default function CreatePostModal({ onClose, onCreate }: Props) {
                 <div className="relative">
                   <img src={imageUrl} alt="uploaded" className="w-full h-48 object-cover rounded-xl" />
                   <button
-                    onClick={() => setImageUrl('')}
+                    onClick={() => { setImageUrl(''); setImageKey(''); }}
                     className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1 hover:bg-black/70"
                   >
                     <X size={14} />

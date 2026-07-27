@@ -16,7 +16,7 @@ import {
   PostReaction,
 } from '../../entities'
 import { EventsGateway } from '../../gateway/events.gateway'
-import { deleteS3ObjectByUrl } from '../../common/s3/s3.util'
+import { deleteS3Object, getSignedImageUrl } from '../../common/s3/s3.util'
 import { CreatePostDto } from './dto/create-post.dto'
 import { UpdatePostDto } from './dto/update-post.dto'
 
@@ -50,7 +50,7 @@ export class PostsService {
     }
   }
 
-  private mapPost(
+  private async mapPost(
     post: PostDocument,
     extra: {
       comments?: CommentDocument[]
@@ -60,6 +60,8 @@ export class PostsService {
       reactions?: ReactionSummary[]
     } = {},
   ) {
+    // post.imageUrl holds the S3 object key; the signed URL is generated fresh on every read
+    const imageUrl = post.imageUrl ? await getSignedImageUrl(post.imageUrl) : ''
     return {
       id: post.id,
       board_id: post.boardId,
@@ -71,7 +73,7 @@ export class PostsService {
       y: post.y,
       width: post.width,
       likes: post.likes,
-      image_url: post.imageUrl,
+      image_url: imageUrl,
       link_url: post.linkUrl,
       link_title: post.linkTitle,
       link_description: post.linkDescription,
@@ -184,7 +186,7 @@ export class PostsService {
         const pollOptions = p.type === 'poll' ? await this.getPollOptionsForPost(p.id, username) : undefined
         const likers = likesByPost.get(p.id) ?? []
         const postReactions = reactionsByPost.get(p.id) ?? []
-        return this.mapPost(p, {
+        return await this.mapPost(p, {
           comments: commentsByPost.get(p.id) ?? [],
           liked_by_me: likers.includes(username),
           liked_by: likers,
@@ -233,7 +235,7 @@ export class PostsService {
 
     const savedPollOptions = pollOpts?.length ? await this.createPollOptions(post.id, pollOpts) : undefined
 
-    const mapped = this.mapPost(post, { comments: [], liked_by_me: false, poll_options: savedPollOptions })
+    const mapped = await this.mapPost(post, { comments: [], liked_by_me: false, poll_options: savedPollOptions })
     this.gateway.emitToBoard(boardId, 'post:created', mapped)
     return mapped
   }
@@ -248,7 +250,7 @@ export class PostsService {
 
     const saved = await post.save()
     const comments = await this.comments.find({ postId: saved.id }).sort({ createdAt: 1 })
-    const mapped = this.mapPost(saved, { comments })
+    const mapped = await this.mapPost(saved, { comments })
     this.gateway.emitToBoard(post.boardId, 'post:updated', mapped)
     return mapped
   }
@@ -258,7 +260,7 @@ export class PostsService {
     this.assertWritePermission(m.role)
     await this.deletePostDependencies([postId])
     await this.posts.deleteOne({ _id: postId })
-    await deleteS3ObjectByUrl(post.imageUrl)
+    await deleteS3Object(post.imageUrl)
     this.gateway.emitToBoard(post.boardId, 'post:deleted', postId)
   }
 
@@ -313,7 +315,7 @@ export class PostsService {
     const allLikes = await this.likes.find({ postId })
     const likers = allLikes.map((l) => l.username)
     this.gateway.emitToBoard(post.boardId, 'post:likes', { postId, likes: saved.likes, liked_by: likers })
-    return this.mapPost(saved, { liked_by_me: !existing, liked_by: likers })
+    return await this.mapPost(saved, { liked_by_me: !existing, liked_by: likers })
   }
 
   // ─── Polls ────────────────────────────────────────────────────────────────────
@@ -334,7 +336,7 @@ export class PostsService {
       this.getPollOptionsForPost(postId, username),
       this.comments.find({ postId }).sort({ createdAt: 1 }),
     ])
-    const mapped = this.mapPost(post, { poll_options: pollOptions, comments })
+    const mapped = await this.mapPost(post, { poll_options: pollOptions, comments })
     this.gateway.emitToBoard(post.boardId, 'post:updated', mapped)
     return mapped
   }
